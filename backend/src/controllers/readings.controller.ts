@@ -23,8 +23,6 @@ export const createReading: RequestHandler = async (req, res) => {
     try {
         const reading = await insertReading(parsed.data);
 
-        // Evaluate 8-hour and 24-hour averages after every received sample.
-        // A temporary alert-processing failure does not undo the saved reading.
         let alertEvaluation: "completed" | "failed" = "completed";
         try {
             await evaluateAlerts();
@@ -72,8 +70,9 @@ export const getHistory: RequestHandler = async (req, res) => {
         return;
     }
 
-    if (!Number.isInteger(limit) || limit < 1 || limit > 20000) {
-        res.status(400).json({ success: false, message: "limit must be an integer from 1 to 20000." });
+    // 50,000 samples cover five days at the configured 10-second interval (43,200 samples).
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50000) {
+        res.status(400).json({ success: false, message: "limit must be an integer from 1 to 50000." });
         return;
     }
 

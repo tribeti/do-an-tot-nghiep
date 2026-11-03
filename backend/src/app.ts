@@ -1,28 +1,15 @@
 import cors from "cors";
 import express, { type ErrorRequestHandler } from "express";
+import path from "node:path";
 import readingsRoutes from "./routes/readings.routes";
 import alertsRoutes from "./routes/alerts.routes";
 import { pool } from "./config/database";
 
 const app = express();
+const publicDirectory = path.resolve(__dirname, "../../frontend");
 
 app.use(cors({ origin: process.env.CORS_ORIGIN ?? "*" }));
-app.use(express.json({ limit: "1mb" }));
-
-app.get("/", (_req, res) => {
-    res.json({
-        name: "Indoor Air Quality API",
-        status: "running",
-        endpoints: {
-            health: "GET /health",
-            create_reading: "POST /api/readings",
-            latest_reading: "GET /api/readings/latest",
-            reading_history: "GET /api/readings/history",
-            reading_averages: "GET /api/readings/averages",
-            alerts: "GET /api/alerts"
-        }
-    });
-});
+app.use(express.json({ limit: "64kb" }));
 
 app.get("/health", async (_req, res) => {
     try {
@@ -34,8 +21,27 @@ app.get("/health", async (_req, res) => {
     }
 });
 
+app.get("/api", (_req, res) => {
+    res.json({
+        name: "Indoor Air Quality API",
+        status: "running",
+        endpoints: [
+            "GET /health",
+            "POST /api/readings",
+            "GET /api/readings/latest",
+            "GET /api/readings/history",
+            "GET /api/readings/averages",
+            "GET /api/alerts"
+        ]
+    });
+});
+
 app.use("/api/readings", readingsRoutes);
 app.use("/api/alerts", alertsRoutes);
+
+// The dashboard is served by the same Express server. ESP32 and browser use
+// the same backend host/port; no separate frontend server or CORS setup needed.
+app.use(express.static(publicDirectory, { etag: true, maxAge: 0 }));
 
 app.use((_req, res) => {
     res.status(404).json({ success: false, message: "Route not found." });

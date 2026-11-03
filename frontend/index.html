@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f7fb">
+  <meta name="description" content="Bảng điều khiển giám sát chất lượng không khí trong phòng.">
+  <title>Air Monitor | Giám sát chất lượng không khí</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Air Monitor trang chủ">
+      <span class="brand-mark">AQ</span>
+      <span class="brand-copy"><strong>Air Monitor</strong><small>INDOOR ENVIRONMENT</small></span>
+    </a>
+    <div class="topbar-actions">
+      <span id="connection-state" class="connection-state is-loading"><span class="status-dot"></span><span id="connection-label">Đang kết nối</span></span>
+      <button id="refresh-button" class="button button-secondary" type="button">
+        <span class="button-icon" aria-hidden="true">↻</span> Làm mới
+      </button>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    <section class="page-heading">
+      <div>
+        <p class="eyebrow">GIÁM SÁT MÔI TRƯỜNG TRONG NHÀ</p>
+        <h1>Chất lượng không khí</h1>
+        <p class="page-description">Theo dõi dữ liệu cảm biến, lịch sử đo và cảnh báo của phòng đang giám sát.</p>
+      </div>
+      <div class="last-update-card">
+        <span class="last-update-label">Lần nhận dữ liệu gần nhất</span>
+        <strong id="last-update">Chưa có dữ liệu</strong>
+        <span id="poll-status" class="muted-text">Tự động cập nhật mỗi 10 giây</span>
+      </div>
+    </section>
+
+    <section class="section-block" aria-labelledby="current-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">CURRENT READINGS</p>
+          <h2 id="current-title">Thông số hiện tại</h2>
+        </div>
+        <span id="sample-time" class="section-meta">Chưa nhận mẫu đo</span>
+      </div>
+
+      <div class="metrics-grid">
+        <article class="metric-card metric-pm">
+          <div class="metric-top"><span class="metric-name">PM1.0</span><span class="metric-symbol">PM</span></div>
+          <div class="metric-value"><strong id="value-pm1_0">—</strong><span>µg/m³</span></div>
+          <p class="metric-foot">Bụi hạt siêu mịn</p>
+        </article>
+        <article class="metric-card metric-pm25">
+          <div class="metric-top"><span class="metric-name">PM2.5</span><span class="metric-symbol">PM</span></div>
+          <div class="metric-value"><strong id="value-pm2_5">—</strong><span>µg/m³</span></div>
+          <p class="metric-foot">Bụi mịn</p>
+        </article>
+        <article class="metric-card metric-pm10">
+          <div class="metric-top"><span class="metric-name">PM10</span><span class="metric-symbol">PM</span></div>
+          <div class="metric-value"><strong id="value-pm10">—</strong><span>µg/m³</span></div>
+          <p class="metric-foot">Bụi có đường kính nhỏ hơn hoặc bằng 10 µm</p>
+        </article>
+        <article class="metric-card metric-co2">
+          <div class="metric-top"><span class="metric-name">CO₂</span><span class="metric-symbol">CO₂</span></div>
+          <div class="metric-value"><strong id="value-co2">—</strong><span>ppm</span></div>
+          <p class="metric-foot">Nồng độ carbon dioxide</p>
+        </article>
+        <article class="metric-card metric-temp">
+          <div class="metric-top"><span class="metric-name">Nhiệt độ</span><span class="metric-symbol">°C</span></div>
+          <div class="metric-value"><strong id="value-temperature">—</strong><span>°C</span></div>
+          <p class="metric-foot">Cảm biến AHT20</p>
+        </article>
+        <article class="metric-card metric-humidity">
+          <div class="metric-top"><span class="metric-name">Độ ẩm</span><span class="metric-symbol">RH</span></div>
+          <div class="metric-value"><strong id="value-humidity">—</strong><span>%</span></div>
+          <p class="metric-foot">Độ ẩm tương đối</p>
+        </article>
+        <article class="metric-card metric-pressure">
+          <div class="metric-top"><span class="metric-name">Áp suất</span><span class="metric-symbol">hPa</span></div>
+          <div class="metric-value"><strong id="value-pressure">—</strong><span>hPa</span></div>
+          <p class="metric-foot">Dữ liệu bổ sung từ BMP280</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section-block" aria-labelledby="threshold-title">
+      <div class="section-heading section-heading-wrap">
+        <div>
+          <p class="eyebrow">TCVN 13521:2022</p>
+          <h2 id="threshold-title">Đánh giá theo giá trị trung bình</h2>
+          <p class="section-description">Chỉ đánh giá khi dữ liệu đã bao phủ đầy đủ cửa sổ thời gian.</p>
+        </div>
+        <label class="select-label" for="average-window">
+          Loại không gian
+          <select id="average-window" class="select-control">
+            <option value="24" selected>Nhà ở · 24 giờ</option>
+            <option value="8">Nhà công cộng · 8 giờ</option>
+          </select>
+        </label>
+      </div>
+      <div class="threshold-grid">
+        <article class="threshold-card" id="threshold-card-pm2_5">
+          <div><span class="threshold-name">PM2.5</span><span class="threshold-limit">Ngưỡng 50 µg/m³</span></div>
+          <strong id="average-pm2_5">—</strong>
+          <span id="status-pm2_5" class="status-pill status-pending">Đang tích lũy dữ liệu</span>
+        </article>
+        <article class="threshold-card" id="threshold-card-pm10">
+          <div><span class="threshold-name">PM10</span><span class="threshold-limit">Ngưỡng 100 µg/m³</span></div>
+          <strong id="average-pm10">—</strong>
+          <span id="status-pm10" class="status-pill status-pending">Đang tích lũy dữ liệu</span>
+        </article>
+        <article class="threshold-card" id="threshold-card-co2">
+          <div><span class="threshold-name">CO₂</span><span class="threshold-limit">Ngưỡng 1.000 ppm</span></div>
+          <strong id="average-co2">—</strong>
+          <span id="status-co2" class="status-pill status-pending">Đang tích lũy dữ liệu</span>
+        </article>
+      </div>
+      <p id="average-footnote" class="footnote">Chưa đủ dữ liệu để đánh giá cửa sổ trung bình.</p>
+    </section>
+
+    <section class="section-block" aria-labelledby="charts-title">
+      <div class="section-heading section-heading-wrap">
+        <div>
+          <p class="eyebrow">HISTORICAL DATA</p>
+          <h2 id="charts-title">Diễn biến theo thời gian</h2>
+          <p id="history-caption" class="section-description">Dữ liệu lịch sử được lấy từ PostgreSQL.</p>
+        </div>
+        <label class="select-label" for="history-range">
+          Khoảng thời gian
+          <select id="history-range" class="select-control">
+            <option value="1h">1 giờ gần nhất</option>
+            <option value="6h">6 giờ gần nhất</option>
+            <option value="24h" selected>24 giờ gần nhất</option>
+            <option value="5d">5 ngày gần nhất</option>
+          </select>
+        </label>
+      </div>
+      <div class="charts-grid">
+        <article class="chart-card">
+          <div class="chart-heading"><div><h3>PM1.0</h3><p>Bụi hạt siêu mịn · µg/m³</p></div><span class="chart-key key-slate"></span></div>
+          <canvas id="chart-pm1_0" height="220" aria-label="Biểu đồ PM1.0"></canvas>
+        </article>
+        <article class="chart-card">
+          <div class="chart-heading"><div><h3>PM2.5</h3><p>Bụi mịn · µg/m³</p></div><span class="chart-key key-blue"></span></div>
+          <canvas id="chart-pm2_5" height="220" aria-label="Biểu đồ PM2.5"></canvas>
+        </article>
+        <article class="chart-card">
+          <div class="chart-heading"><div><h3>PM10</h3><p>Bụi · µg/m³</p></div><span class="chart-key key-teal"></span></div>
+          <canvas id="chart-pm10" height="220" aria-label="Biểu đồ PM10"></canvas>
+        </article>
+        <article class="chart-card">
+          <div class="chart-heading"><div><h3>CO₂</h3><p>Carbon dioxide · ppm</p></div><span class="chart-key key-orange"></span></div>
+          <canvas id="chart-co2" height="220" aria-label="Biểu đồ CO2"></canvas>
+        </article>
+      </div>
+    </section>
+
+    <section class="lower-grid">
+      <article class="panel-card history-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">MEASUREMENTS</p><h2>Dữ liệu gần đây</h2></div>
+          <span id="history-count" class="count-label">0 mẫu</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Thời gian</th><th>PM1.0</th><th>PM2.5</th><th>PM10</th><th>CO₂</th><th>Nhiệt độ</th><th>Độ ẩm</th></tr></thead>
+            <tbody id="readings-table-body"><tr><td colspan="7" class="empty-cell">Chưa có dữ liệu.</td></tr></tbody>
+          </table>
+        </div>
+      </article>
+
+      <aside class="panel-card alerts-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">THRESHOLD EVENTS</p><h2>Sự kiện cảnh báo</h2></div>
+          <span id="active-alert-count" class="count-label">0 đang hoạt động</span>
+        </div>
+        <div id="alerts-list" class="alerts-list"><p class="empty-state">Chưa có sự kiện cảnh báo.</p></div>
+      </aside>
+    </section>
+
+    <footer class="page-footer">
+      <span>Indoor Air Quality Monitoring System</span>
+      <span>ESP32 · Node.js · PostgreSQL</span>
+    </footer>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

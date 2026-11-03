@@ -1,5 +1,5 @@
 import { pool } from "../config/database";
-import { ReadingInput } from "../validators/readings.validator";
+import type { ReadingInput } from "../validators/readings.validator";
 
 export interface WindowAverage {
     window_hours: 8 | 24;
@@ -117,8 +117,9 @@ export async function getWindowAverage(windowHours: 8 | 24): Promise<WindowAvera
     const last = row.last_measured_at ? new Date(row.last_measured_at) : null;
     const sampleCount = Number(row.sample_count);
 
-    // A full-window result requires data near both ends of the requested period.
-    // This avoids comparing a short startup sample against an 8-hour/24-hour limit.
+    // Do not compare a partial startup window with the full-window TCVN limits.
+    // With 10-second collection, the first record should cover the start and the
+    // newest record should be reasonably close to the end of the rolling window.
     const complete = Boolean(
         sampleCount > 0 &&
         first && last &&

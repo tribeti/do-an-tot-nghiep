@@ -1,18 +1,26 @@
 import { z } from "zod";
 
-// One request represents one sensor collection cycle (10 seconds).
-// Missing/unavailable sensor values may be sent as null.
+// One POST request represents one ESP32 sample collected every 10 seconds.
+// A sensor that is not ready may be represented as null.
+const particulateValue = z.number().finite().min(0).max(5000).nullable().optional();
+const temperatureValue = z.number().finite().min(-40).max(85).nullable().optional();
+
 export const readingSchema = z.object({
     measured_at: z.string().datetime({ offset: true }).optional(),
 
-    pm1_0: z.number().finite().min(0).nullable().optional(),
-    pm2_5: z.number().finite().min(0).nullable().optional(),
-    pm10: z.number().finite().min(0).nullable().optional(),
+    pm1_0: particulateValue,
+    pm2_5: particulateValue,
+    pm10: particulateValue,
 
-    co2: z.number().int().min(0).nullable().optional(),
-    temperature: z.number().finite().min(-40).max(85).nullable().optional(),
+    // MH-Z19B variants support configured measuring ranges up to 10,000 ppm.
+    co2: z.number().int().min(0).max(10000).nullable().optional(),
+
+    // AHT20 temperature and relative humidity.
+    temperature: temperatureValue,
     humidity: z.number().finite().min(0).max(100).nullable().optional(),
-    pressure: z.number().finite().positive().nullable().optional()
+
+    // Supplementary BMP280 pressure, in hPa. Not used for TCVN alerts.
+    pressure: z.number().finite().min(100).max(1200).nullable().optional()
 }).strict().refine(
     (value) => [
         value.pm1_0,

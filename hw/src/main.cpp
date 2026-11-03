@@ -7,6 +7,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <string.h>
+#include <math.h>
 
 #include <Adafruit_AHTX0.h>
 #include <Adafruit_BMP280.h>
@@ -241,8 +242,10 @@ bool ensureWiFi() {
 }
 
 // ================== HTTP POST ==================
-bool postReading(const char* payload) {
-    if (!ensureWiFi()) return false;
+enum class PostResult { Success, Retry, Rejected };
+
+PostResult postReading(const char* payload) {
+    if (!ensureWiFi()) return PostResult::Retry;
 
     WiFiClient client;
     HTTPClient http;
@@ -251,23 +254,31 @@ bool postReading(const char* payload) {
 
     if (!http.begin(client, SERVER_URL)) {
         Serial.println("HTTP: could not initialize connection");
-        return false;
+        return PostResult::Retry;
     }
 
     http.addHeader("Content-Type", "application/json");
     const int statusCode = http.POST(String(payload));
 
-    if (statusCode > 0) {
+    PostResult result = PostResult::Retry;
+    if (statusCode >= 200 && statusCode < 300) {
         Serial.printf("HTTP POST: %d\n", statusCode);
-        if (statusCode < 200 || statusCode >= 300) {
-            Serial.println(http.getString());
-        }
+        result = PostResult::Success;
+    } else if (statusCode >= 400 && statusCode < 500) {
+        Serial.printf("HTTP POST rejected: %d\n", statusCode);
+        Serial.println(http.getString());
+        // A 4xx response normally means the payload or endpoint is wrong.
+        // Retrying the same invalid sample forever would block the queue.
+        result = PostResult::Rejected;
+    } else if (statusCode > 0) {
+        Serial.printf("HTTP server error: %d\n", statusCode);
+        Serial.println(http.getString());
     } else {
         Serial.printf("HTTP POST failed: %s\n", http.errorToString(statusCode).c_str());
     }
 
     http.end();
-    return statusCode >= 200 && statusCode < 300;
+    return result;
 }
 
 bool enqueueReading(const char* payload) {
@@ -300,11 +311,17 @@ void flushQueuedReading() {
     if (!ensureWiFi()) return;
 
     lastPostAttempt = now;
-    if (postReading(readingQueue[queueHead])) {
+    const PostResult result = postReading(readingQueue[queueHead]);
+    if (result == PostResult::Success) {
         queueHead = (queueHead + 1) % QUEUE_CAPACITY;
         --queueCount;
         nextPostDelayMs = 500;
         Serial.printf("Backend: sample accepted; %u remaining\n", static_cast<unsigned>(queueCount));
+    } else if (result == PostResult::Rejected) {
+        queueHead = (queueHead + 1) % QUEUE_CAPACITY;
+        --queueCount;
+        nextPostDelayMs = 500;
+        Serial.printf("Backend: invalid/rejected sample discarded; %u remaining\n", static_cast<unsigned>(queueCount));
     } else {
         nextPostDelayMs = POST_RETRY_DELAY_MS;
         Serial.println("Backend: send failed; sample kept in circular queue for retry");
@@ -340,7 +357,7 @@ void collectAndSendReading() {
 
     const bool pmsFresh = pms.valid && (millis() - lastPmsUpdate <= PMS_STALE_MS);
 
-    JsonDocument document;
+    StaticJsonDocument<384> document;
     const String timestamp = getUtcTimestamp();
     if (timestamp.length() > 0) {
         document["measured_at"] = timestamp;

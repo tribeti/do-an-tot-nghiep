@@ -2,16 +2,16 @@
 
 Dự án thu thập dữ liệu cảm biến bằng ESP32, gửi dữ liệu đến backend qua HTTP và lưu vào PostgreSQL. Backend cung cấp API để truy vấn số đo, tính trung bình theo cửa sổ 8 giờ và 24 giờ, đồng thời ghi nhận cảnh báo chất lượng không khí.
 
-Phạm vi hiện tại là một thiết bị trong một phòng; hệ thống chưa quản lý nhiều thiết bị hoặc nhiều phòng.
-
 ## Thành phần
 
 - `hw/`: firmware PlatformIO dùng Arduino framework cho ESP32.
 - `backend/`: API Node.js, TypeScript, Express và PostgreSQL.
+- `frontend/`: dashboard HTML/CSS/JavaScript.
 - `backend/database/schema.sql`: cấu trúc bảng và chỉ mục cho PostgreSQL.
-- `backend/database/migrate-from-previous-schema.sql`: migration từ schema cũ.
 
 Luồng dữ liệu: PMS7003, MH-Z19B, AHT20 và BMP280 được đọc bởi ESP32; firmware gửi một mẫu JSON mỗi 10 giây đến `POST /api/readings`. Backend kiểm tra dữ liệu, lưu vào PostgreSQL và đánh giá cảnh báo.
+
+Dashboard lấy số đo mới nhất mỗi 10 giây và tải lại lịch sử mỗi 60 giây. Khi mạng hoặc backend gián đoạn, firmware giữ tối đa 30 mẫu trong RAM để thử gửi lại.
 
 ## Thiết bị và kết nối
 
@@ -31,6 +31,7 @@ Kiểm tra điện áp hoạt động và sơ đồ chân của từng module tr
 - Node.js và npm.
 - PostgreSQL.
 - PlatformIO Core hoặc tiện ích PlatformIO trong VS Code.
+- `curl` để kiểm tra nhanh API (tùy chọn).
 - ESP32 tương thích với cấu hình board `esp32dev`.
 
 ## Cài đặt và chạy backend
@@ -56,37 +57,41 @@ Khởi tạo schema:
 psql -h localhost -U air_quality_user -d air_quality -f database/schema.sql
 ```
 
-Nếu database đang dùng schema cũ, xem lại migration trước khi chạy:
+Build và chạy backend ở chế độ phát triển:
 
 ```bash
-psql -h localhost -U air_quality_user -d air_quality -f database/migrate-from-previous-schema.sql
-```
-
-Chạy backend ở chế độ phát triển:
-
-```bash
+npm run build
 npm run dev
 ```
 
-Biên dịch TypeScript và chạy bản đã biên dịch:
+Để chạy bản đã biên dịch thay cho chế độ phát triển:
 
 ```bash
 npm run build
 npm start
 ```
 
-Mặc định backend lắng nghe tại cổng `3000` trên mọi giao diện mạng. ESP32 và máy chạy backend cần truy cập được nhau trong mạng LAN; cấu hình URL firmware bằng địa chỉ LAN của máy backend, không dùng `localhost`.
+Mặc định backend lắng nghe tại cổng `3001` trên mọi giao diện mạng. ESP32 và máy chạy backend cần truy cập được nhau trong mạng LAN; cấu hình URL firmware bằng địa chỉ LAN của máy backend, không dùng `localhost`.
+
+Express phục vụ dashboard từ thư mục `frontend/` ở thư mục gốc của dự án. Khi backend chạy, mở `http://localhost:3001/`. Endpoint `GET /api` trả thông tin API; `GET /health` kiểm tra kết nối database.
 
 ## Cấu hình và nạp firmware
 
-Tạo tệp `hw/include/secrets.h` trên máy phát triển. Tệp này được Git bỏ qua để không đưa thông tin mạng vào repository:
+Từ thư mục gốc dự án, tạo `hw/include/secrets.h` từ tệp mẫu:
+
+```bash
+cd hw
+cp include/example.h include/secrets.h
+```
+
+Điền Wi-Fi và địa chỉ IPv4 LAN của máy chạy backend vào `include/secrets.h`:
 
 ```cpp
 #pragma once
 
 #define WIFI_SSID "ten_wifi"
 #define WIFI_PASSWORD "mat_khau_wifi"
-#define SERVER_URL "http://192.168.1.10:3000/api/readings"
+#define SERVER_URL "http://192.168.1.10:3001/api/readings"
 ```
 
 Thay địa chỉ IP và cổng trong `SERVER_URL` theo máy chạy backend. Chỉnh cổng nạp trong `hw/platformio.ini` nếu thiết bị không dùng `/dev/ttyUSB0`.
@@ -99,7 +104,7 @@ pio run --target upload
 pio device monitor
 ```
 
-Serial monitor dùng tốc độ `115200`. Khi Wi-Fi hoặc backend tạm thời không truy cập được, firmware giữ tối đa 30 mẫu trong hàng đợi RAM để thử gửi lại. Khi hàng đợi đầy, mẫu cũ nhất sẽ bị loại bỏ; hàng đợi sẽ mất nội dung khi ESP32 khởi động lại.
+Serial monitor dùng tốc độ `115200`. MH-Z19B cần khoảng 3 phút làm nóng sau khi ESP32 khởi động. Khi Wi-Fi hoặc backend tạm thời không truy cập được, firmware giữ tối đa 30 mẫu trong hàng đợi RAM để thử gửi lại. Khi hàng đợi đầy, mẫu cũ nhất sẽ bị loại bỏ; hàng đợi sẽ mất nội dung khi ESP32 khởi động lại.
 
 ## API
 
@@ -107,7 +112,8 @@ Các endpoint chính:
 
 | Phương thức | Endpoint | Mô tả |
 |---|---|---|
-| `GET` | `/` | Thông tin API |
+| `GET` | `/` | Dashboard |
+| `GET` | `/api` | Thông tin API |
 | `GET` | `/health` | Kiểm tra API và kết nối database |
 | `POST` | `/api/readings` | Nhận và lưu một mẫu đo |
 | `GET` | `/api/readings/latest` | Lấy mẫu mới nhất |
@@ -115,7 +121,7 @@ Các endpoint chính:
 | `GET` | `/api/readings/averages` | Lấy trung bình 8 giờ và 24 giờ |
 | `GET` | `/api/alerts` | Lấy danh sách cảnh báo |
 
-Lịch sử hỗ trợ `from`, `to` và `limit`; mặc định là 24 giờ gần nhất, tối đa 20.000 bản ghi. Trung bình hỗ trợ `?window=8` hoặc `?window=24`. Danh sách cảnh báo hỗ trợ `?status=active`, `?status=resolved` và `limit`.
+Lịch sử hỗ trợ `from`, `to` và `limit`; mặc định là 24 giờ gần nhất với tối đa 10.000 bản ghi, giới hạn cho phép tối đa 50.000. Trung bình hỗ trợ `?window=8` hoặc `?window=24`; bỏ `window` để lấy cả hai cửa sổ. Danh sách cảnh báo hỗ trợ `?status=active`, `?status=resolved` và `limit` (mặc định 100, tối đa 500).
 
 Ví dụ payload gửi đến `POST /api/readings`:
 
@@ -137,12 +143,23 @@ Ví dụ payload gửi đến `POST /api/readings`:
 Kiểm tra nhanh khi backend đang chạy:
 
 ```bash
-curl http://localhost:3000/health
-curl http://localhost:3000/api/readings/latest
-curl http://localhost:3000/api/readings/history
-curl http://localhost:3000/api/readings/averages
-curl http://localhost:3000/api/alerts
+curl http://localhost:3001/health
+curl http://localhost:3001/api
+curl http://localhost:3001/api/readings/latest
+curl http://localhost:3001/api/readings/history
+curl http://localhost:3001/api/readings/averages
+curl http://localhost:3001/api/alerts
 ```
+
+Để thử gửi một mẫu giả lập (lệnh này sẽ thêm một bản ghi vào database):
+
+```bash
+curl -X POST http://localhost:3001/api/readings \
+  -H 'Content-Type: application/json' \
+  -d '{"measured_at":"2026-11-03T10:00:00Z","pm1_0":10,"pm2_5":18,"pm10":25,"co2":650,"temperature":28.5,"humidity":65,"pressure":1008.5}'
+```
+
+POST thành công trả HTTP `201`. Sau đó gọi lại `/api/readings/latest` để xác nhận dữ liệu đã được lưu. Có thể bỏ `measured_at`; khi đó backend dùng thời điểm nhận mẫu. Mỗi request cần có ít nhất một giá trị cảm biến khác `null`.
 
 ## Trung bình và cảnh báo
 
@@ -162,12 +179,10 @@ Các biến cấu hình được khai báo trong `backend/.env.example`:
 
 | Biến | Mặc định | Mô tả |
 |---|---|---|
-| `PORT` | `3000` | Cổng HTTP của backend |
+| `PORT` | `3001` | Cổng HTTP của backend |
 | `DB_HOST` | `localhost` | Máy chủ PostgreSQL |
 | `DB_PORT` | `5432` | Cổng PostgreSQL |
 | `DB_NAME` | `air_quality` | Tên database |
 | `DB_USER` | Không đặt | Tài khoản database |
 | `DB_PASSWORD` | Không đặt | Mật khẩu database |
 | `CORS_ORIGIN` | `*` | Origin được phép gọi API |
-
-Không commit `backend/.env` hoặc `hw/include/secrets.h` chứa thông tin xác thực vào Git.
