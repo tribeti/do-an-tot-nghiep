@@ -1,45 +1,46 @@
-CREATE TABLE sensor_readings (
+-- Database schema for the indoor air-quality monitoring project.
+-- One room and one device are in scope; there is intentionally no device_id.
+
+CREATE TABLE IF NOT EXISTS sensor_readings (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-
-    device_id VARCHAR(50) NOT NULL DEFAULT 'esp32-01',
-
-    measured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    measured_at TIMESTAMPTZ NOT NULL,
     received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    pm1_0 REAL CHECK (pm1_0 >= 0),
-    pm2_5 REAL CHECK (pm2_5 >= 0),
-    pm10 REAL CHECK (pm10 >= 0),
+    pm1_0 DOUBLE PRECISION CHECK (pm1_0 IS NULL OR pm1_0 >= 0),
+    pm2_5 DOUBLE PRECISION CHECK (pm2_5 IS NULL OR pm2_5 >= 0),
+    pm10 DOUBLE PRECISION CHECK (pm10 IS NULL OR pm10 >= 0),
 
-    co2 INTEGER CHECK (co2 >= 0),
+    co2 INTEGER CHECK (co2 IS NULL OR co2 >= 0),
+    temperature DOUBLE PRECISION CHECK (temperature IS NULL OR temperature BETWEEN -40 AND 85),
+    humidity DOUBLE PRECISION CHECK (humidity IS NULL OR humidity BETWEEN 0 AND 100),
 
-    temperature DOUBLE PRECISION,
-    humidity DOUBLE PRECISION CHECK (humidity BETWEEN 0 AND 100),
-
-    bmp_temperature DOUBLE PRECISION,
-    pressure DOUBLE PRECISION
+    -- Pressure is recorded as supplementary BME280/BMP280 data; it is not used for TCVN alerts.
+    pressure DOUBLE PRECISION CHECK (pressure IS NULL OR pressure > 0)
 );
 
-CREATE INDEX idx_readings_measured_at
-ON sensor_readings (measured_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sensor_readings_measured_at
+    ON sensor_readings (measured_at DESC);
 
-CREATE INDEX idx_readings_device_time
-ON sensor_readings (device_id, measured_at DESC);
-
-
-CREATE TABLE alerts (
+CREATE TABLE IF NOT EXISTS alerts (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-
-    parameter VARCHAR(30) NOT NULL,
-    window_hours SMALLINT NOT NULL
-        CHECK (window_hours IN (8, 24)),
-
+    parameter VARCHAR(20) NOT NULL CHECK (parameter IN ('pm2_5', 'pm10', 'co2')),
+    window_hours SMALLINT NOT NULL CHECK (window_hours IN (8, 24)),
     average_value DOUBLE PRECISION NOT NULL,
     threshold_value DOUBLE PRECISION NOT NULL,
-
     window_start TIMESTAMPTZ NOT NULL,
     window_end TIMESTAMPTZ NOT NULL,
-
+    status VARCHAR(10) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'resolved')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    UNIQUE (parameter, window_hours, window_start, window_end)
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at TIMESTAMPTZ
 );
+
+-- Prevent multiple simultaneously-active alerts for the same parameter and averaging window.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_alerts_active_parameter_window
+    ON alerts (parameter, window_hours)
+    WHERE status = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_alerts_created_at
+    ON alerts (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alerts_status_created_at
+    ON alerts (status, created_at DESC);
