@@ -7,9 +7,6 @@
   const $ = (id) => document.getElementById(id);
 
   const state = {
-    latest: null,
-    averages: null,
-    alerts: [],
     history: [],
     averageWindow: 24,
     historyRange: "24h",
@@ -23,8 +20,7 @@
     { key: "pm10", id: "value-pm10", digits: 0 },
     { key: "co2", id: "value-co2", digits: 0 },
     { key: "temperature", id: "value-temperature", digits: 1 },
-    { key: "humidity", id: "value-humidity", digits: 1 },
-    { key: "pressure", id: "value-pressure", digits: 1 }
+    { key: "humidity", id: "value-humidity", digits: 1 }
   ];
 
   const thresholds = {
@@ -80,7 +76,6 @@
   }
 
   function renderLatest(reading) {
-    state.latest = reading;
     for (const metric of metrics) {
       $(metric.id).textContent = reading ? numberFormat(reading[metric.key], metric.digits) : "—";
     }
@@ -94,7 +89,6 @@
   }
 
   function renderAverages(summary) {
-    state.averages = summary;
     const values = summary?.averages ?? {};
     for (const [key, rule] of Object.entries(thresholds)) {
       const value = values[key];
@@ -126,16 +120,16 @@
   }
 
   function renderAlerts(alerts) {
-    state.alerts = Array.isArray(alerts) ? alerts : [];
-    const activeCount = state.alerts.filter((item) => item.status === "active").length;
+    const alertList = Array.isArray(alerts) ? alerts : [];
+    const activeCount = alertList.filter((item) => item.status === "active").length;
     $("active-alert-count").textContent = `${activeCount} đang hoạt động`;
 
-    if (state.alerts.length === 0) {
+    if (alertList.length === 0) {
       $("alerts-list").innerHTML = '<p class="empty-state">Chưa có sự kiện cảnh báo.</p>';
       return;
     }
 
-    $("alerts-list").innerHTML = state.alerts.slice(0, 10).map((alert) => {
+    $("alerts-list").innerHTML = alertList.slice(0, 10).map((alert) => {
       const status = alert.status === "active" ? "active" : "resolved";
       const statusLabel = status === "active" ? "Đang hoạt động" : "Đã kết thúc";
       const unit = alert.parameter === "co2" ? "ppm" : "µg/m³";

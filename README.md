@@ -9,7 +9,7 @@ Dự án thu thập dữ liệu cảm biến bằng ESP32, gửi dữ liệu đ�
 - `frontend/`: dashboard HTML/CSS/JavaScript.
 - `backend/database/schema.sql`: cấu trúc bảng và chỉ mục cho PostgreSQL.
 
-Luồng dữ liệu: PMS7003, MH-Z19B, AHT20 và BMP280 được đọc bởi ESP32; firmware gửi một mẫu JSON mỗi 10 giây đến `POST /api/readings`. Backend kiểm tra dữ liệu, lưu vào PostgreSQL và đánh giá cảnh báo.
+Luồng dữ liệu: PMS7003, MH-Z19B và DHT22 được đọc bởi ESP32; firmware gửi một mẫu JSON mỗi 10 giây đến `POST /api/readings`. Backend kiểm tra dữ liệu, lưu vào PostgreSQL và đánh giá cảnh báo.
 
 Dashboard lấy số đo mới nhất mỗi 10 giây và tải lại lịch sử mỗi 60 giây. Khi mạng hoặc backend gián đoạn, firmware giữ tối đa 30 mẫu trong RAM để thử gửi lại.
 
@@ -21,10 +21,9 @@ Firmware hiện hỗ trợ các cảm biến sau:
 |---|---|---|
 | PMS7003 | PM1.0, PM2.5, PM10 | UART2, RX ESP32 GPIO16, TX GPIO17 |
 | MH-Z19B | CO2 | UART1, RX ESP32 GPIO18, TX GPIO19 |
-| AHT20 | Nhiệt độ, độ ẩm | I2C, SDA GPIO21, SCL GPIO22 |
-| BMP280 | Áp suất | I2C, SDA GPIO21, SCL GPIO22 |
+| DHT22 | Nhiệt độ, độ ẩm | DATA GPIO4 (cần điện trở kéo lên theo module/sơ đồ đấu nối) |
 
-Kiểm tra điện áp hoạt động và sơ đồ chân của từng module trước khi đấu nối. Cảm biến BMP280 được khởi tạo ở địa chỉ I2C `0x77`, sau đó thử `0x76`. Firmware chờ khoảng 3 phút để MH-Z19B khởi động trước khi sử dụng số đo CO2.
+Kiểm tra điện áp hoạt động và sơ đồ chân của từng module trước khi đấu nối. Chân DHT22 có thể đổi tại `DHT_DATA_PIN` trong `hw/src/main.cpp`. Firmware chờ khoảng 3 phút để MH-Z19B khởi động trước khi sử dụng số đo CO2. Firmware ghi số đo và trạng thái Wi-Fi/backend lên Serial Monitor (115200 baud); nếu Wi-Fi hoặc backend tạm thời mất kết nối, tối đa 30 mẫu được giữ trong RAM và tự gửi lại.
 
 ## Yêu cầu
 
@@ -133,8 +132,7 @@ Ví dụ payload gửi đến `POST /api/readings`:
   "pm10": 25,
   "co2": 650,
   "temperature": 28.5,
-  "humidity": 65,
-  "pressure": 1008.5
+  "humidity": 65
 }
 ```
 
@@ -156,7 +154,7 @@ curl http://localhost:3001/api/alerts
 ```bash
 curl -X POST http://localhost:3001/api/readings \
   -H 'Content-Type: application/json' \
-  -d '{"measured_at":"2026-11-03T10:00:00Z","pm1_0":10,"pm2_5":18,"pm10":25,"co2":650,"temperature":28.5,"humidity":65,"pressure":1008.5}'
+  -d '{"measured_at":"2026-11-03T10:00:00Z","pm1_0":10,"pm2_5":18,"pm10":25,"co2":650,"temperature":28.5,"humidity":65}'
 ```
 
 POST thành công trả HTTP `201`. Sau đó gọi lại `/api/readings/latest` để xác nhận dữ liệu đã được lưu. Có thể bỏ `measured_at`; khi đó backend dùng thời điểm nhận mẫu. Mỗi request cần có ít nhất một giá trị cảm biến khác `null`.

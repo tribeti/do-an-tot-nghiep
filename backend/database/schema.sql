@@ -12,10 +12,7 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
 
     co2 INTEGER CHECK (co2 IS NULL OR co2 >= 0),
     temperature DOUBLE PRECISION CHECK (temperature IS NULL OR temperature BETWEEN -40 AND 85),
-    humidity DOUBLE PRECISION CHECK (humidity IS NULL OR humidity BETWEEN 0 AND 100),
-
-    -- Pressure is recorded as supplementary BME280/BMP280 data; it is not used for TCVN alerts.
-    pressure DOUBLE PRECISION CHECK (pressure IS NULL OR pressure > 0)
+    humidity DOUBLE PRECISION CHECK (humidity IS NULL OR humidity BETWEEN 0 AND 100)
 );
 
 CREATE INDEX IF NOT EXISTS idx_sensor_readings_measured_at

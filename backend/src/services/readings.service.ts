@@ -25,13 +25,12 @@ export async function insertReading(reading: ReadingInput) {
             pm10,
             co2,
             temperature,
-            humidity,
-            pressure
+            humidity
         ) VALUES (
             COALESCE($1::timestamptz, NOW()),
-            $2, $3, $4, $5, $6, $7, $8
+            $2, $3, $4, $5, $6, $7
         )
-        RETURNING *`,
+        RETURNING id, measured_at, received_at, pm1_0, pm2_5, pm10, co2, temperature, humidity`,
         [
             reading.measured_at ?? null,
             reading.pm1_0 ?? null,
@@ -39,8 +38,7 @@ export async function insertReading(reading: ReadingInput) {
             reading.pm10 ?? null,
             reading.co2 ?? null,
             reading.temperature ?? null,
-            reading.humidity ?? null,
-            reading.pressure ?? null
+            reading.humidity ?? null
         ]
     );
 
@@ -49,7 +47,7 @@ export async function insertReading(reading: ReadingInput) {
 
 export async function getLatestReading() {
     const result = await pool.query(
-        `SELECT *
+        `SELECT id, measured_at, received_at, pm1_0, pm2_5, pm10, co2, temperature, humidity
          FROM sensor_readings
          ORDER BY measured_at DESC, id DESC
          LIMIT 1`
@@ -67,7 +65,7 @@ export interface HistoryOptions {
 export async function getReadingHistory(options: HistoryOptions) {
     const result = await pool.query(
         `SELECT * FROM (
-            SELECT *
+            SELECT id, measured_at, received_at, pm1_0, pm2_5, pm10, co2, temperature, humidity
             FROM sensor_readings
             WHERE measured_at >= $1 AND measured_at <= $2
             ORDER BY measured_at DESC, id DESC

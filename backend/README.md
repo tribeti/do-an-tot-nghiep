@@ -55,7 +55,7 @@ Gửi một mẫu thử (sẽ thêm bản ghi vào database):
 ```bash
 curl -X POST http://localhost:3001/api/readings \
 	-H 'Content-Type: application/json' \
-	-d '{"measured_at":"2026-11-03T10:00:00Z","pm1_0":10,"pm2_5":18,"pm10":25,"co2":650,"temperature":28.5,"humidity":65,"pressure":1008.5}'
+	-d '{"measured_at":"2026-11-03T10:00:00Z","pm1_0":10,"pm2_5":18,"pm10":25,"co2":650,"temperature":28.5,"humidity":65}'
 ```
 
 POST thành công trả HTTP `201`. Kiểm tra bản ghi mới nhất:

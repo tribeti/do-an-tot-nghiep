@@ -1,5 +1,4 @@
 #include <Arduino.h>
-#include <Wire.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <HTTPClient.h>
@@ -9,18 +8,13 @@
 #include <string.h>
 #include <math.h>
 
-#include <Adafruit_AHTX0.h>
-#include <Adafruit_BMP280.h>
-#include <Adafruit_Sensor.h>
+#include <DHT.h>
 
 #include "secrets.h"
 
 // ================== SENSOR OBJECTS ==================
-Adafruit_AHTX0 aht;
-Adafruit_BMP280 bmp;
-
-bool ahtOK = false;
-bool bmpOK = false;
+static constexpr uint8_t DHT_DATA_PIN = 4;
+DHT dht(DHT_DATA_PIN, DHT22);
 
 // ================== PMS7003 (UART2) ==================
 HardwareSerial PMSSerial(2);
@@ -67,7 +61,7 @@ static constexpr unsigned long POST_RETRY_DELAY_MS = 2000;
 
 // ================== PMS7003 FRAME READER ==================
 // Read continuously from loop() so the latest complete frame is ready at sample time.
-bool readPMS7003() {
+void readPMS7003() {
     static uint8_t buffer[32];
     static uint8_t index = 0;
 
@@ -109,11 +103,9 @@ bool readPMS7003() {
             pms.pm10 = (static_cast<uint16_t>(buffer[14]) << 8) | buffer[15];
             pms.valid = true;
             lastPmsUpdate = millis();
-            return true;
+            return;
         }
     }
-
-    return false;
 }
 
 // ================== MH-Z19B READER ==================
@@ -281,11 +273,11 @@ PostResult postReading(const char* payload) {
     return result;
 }
 
-bool enqueueReading(const char* payload) {
+void enqueueReading(const char* payload) {
     const size_t length = strlen(payload);
     if (length == 0 || length >= JSON_BUFFER_SIZE) {
         Serial.println("Queue: JSON payload is empty or too large");
-        return false;
+        return;
     }
 
     if (queueCount == QUEUE_CAPACITY) {
@@ -299,7 +291,6 @@ bool enqueueReading(const char* payload) {
     queueTail = (queueTail + 1) % QUEUE_CAPACITY;
     ++queueCount;
     Serial.printf("Queue: %u sample(s) waiting\n", static_cast<unsigned>(queueCount));
-    return true;
 }
 
 void flushQueuedReading() {
@@ -330,22 +321,12 @@ void flushQueuedReading() {
 
 // ================== COLLECT + SEND ONE SAMPLE ==================
 void collectAndSendReading() {
-    sensors_event_t humidityEvent;
-    sensors_event_t temperatureEvent;
+    const float temperature = dht.readTemperature();
+    const float humidity = dht.readHumidity();
 
-    float temperature = NAN;
-    float humidity = NAN;
-    float pressure = NAN;
-
-    if (ahtOK) {
-        aht.getEvent(&humidityEvent, &temperatureEvent);
-        temperature = temperatureEvent.temperature;
-        humidity = humidityEvent.relative_humidity;
-    }
-
-    if (bmpOK) {
-        pressure = bmp.readPressure() / 100.0F; // hPa
-    }
+    const bool dhtFresh = isfinite(temperature) && temperature >= -40.0F &&
+                          temperature <= 80.0F && isfinite(humidity) &&
+                          humidity >= 0.0F && humidity <= 100.0F;
 
     int co2 = -1;
     if (millis() - bootTime >= MHZ_WARMUP_MS) {
@@ -376,7 +357,7 @@ void collectAndSendReading() {
     if (co2 > 0 && mhzOK) document["co2"] = co2;
     else document["co2"] = nullptr;
 
-    if (ahtOK && isfinite(temperature) && isfinite(humidity)) {
+    if (dhtFresh) {
         document["temperature"] = temperature;
         document["humidity"] = humidity;
     } else {
@@ -384,14 +365,18 @@ void collectAndSendReading() {
         document["humidity"] = nullptr;
     }
 
-    if (bmpOK && isfinite(pressure) && pressure > 0) document["pressure"] = pressure;
-    else document["pressure"] = nullptr;
+    const bool hasSensorData = pmsFresh || (co2 > 0 && mhzOK) || dhtFresh;
+    if (!hasSensorData) {
+        Serial.println("JSON: no valid sensor measurements; sample not queued");
+    }
 
     char payload[JSON_BUFFER_SIZE];
-    const size_t payloadLength = serializeJson(document, payload, sizeof(payload));
-    if (payloadLength == 0 || payloadLength >= sizeof(payload)) {
-        Serial.println("JSON: serialization failed or payload buffer too small");
-        return;
+    if (hasSensorData) {
+        const size_t payloadLength = serializeJson(document, payload, sizeof(payload));
+        if (payloadLength == 0 || payloadLength >= sizeof(payload)) {
+            Serial.println("JSON: serialization failed or payload buffer too small");
+            return;
+        }
     }
 
     Serial.println("\n========== SENSOR READING ==========");
@@ -405,15 +390,14 @@ void collectAndSendReading() {
     if (co2 > 0 && mhzOK) Serial.printf("MH-Z19B | CO2: %d ppm\n", co2);
     else Serial.println("MH-Z19B | Unavailable / warming up");
 
-    if (ahtOK) Serial.printf("AHT20   | Temperature: %.2f C, Humidity: %.2f %%\n", temperature, humidity);
-    else Serial.println("AHT20   | Not connected");
+    if (dhtFresh) Serial.printf("DHT22   | Temperature: %.2f C, Humidity: %.2f %%\n", temperature, humidity);
+    else Serial.println("DHT22   | No valid measurement; check sensor and GPIO4 wiring");
 
-    if (bmpOK) Serial.printf("BMP280  | Pressure: %.2f hPa\n", pressure);
-    else Serial.println("BMP280  | Not connected");
-
-    Serial.print("JSON: ");
-    Serial.println(payload);
-    enqueueReading(payload);
+    if (hasSensorData) {
+        Serial.print("JSON: ");
+        Serial.println(payload);
+        enqueueReading(payload);
+    }
     Serial.println("====================================\n");
 }
 
@@ -427,26 +411,9 @@ void setup() {
     Serial.println("===== ESP32 Air Quality Monitor =====");
     Serial.println("Sampling interval: 10 seconds");
 
-    // I2C sensors: SDA=21, SCL=22
-    Wire.begin(21, 22);
-    Wire.setClock(100000);
-
-    ahtOK = aht.begin();
-    Serial.println(ahtOK ? "AHT20  : OK" : "AHT20  : ERROR");
-
-    bmpOK = bmp.begin(0x77);
-    if (!bmpOK) bmpOK = bmp.begin(0x76);
-    Serial.println(bmpOK ? "BMP280 : OK" : "BMP280 : ERROR");
-
-    if (bmpOK) {
-        bmp.setSampling(
-            Adafruit_BMP280::MODE_NORMAL,
-            Adafruit_BMP280::SAMPLING_X2,
-            Adafruit_BMP280::SAMPLING_X16,
-            Adafruit_BMP280::FILTER_X16,
-            Adafruit_BMP280::STANDBY_MS_500
-        );
-    }
+    dht.begin();
+    Serial.printf("DHT22  : initialized on GPIO%u (data read at each sample)\n",
+                  static_cast<unsigned>(DHT_DATA_PIN));
 
     // UART sensors
     PMSSerial.begin(9600, SERIAL_8N1, PMS_RX, PMS_TX);
@@ -471,7 +438,6 @@ void loop() {
         collectAndSendReading();
     }
 
-    // Send queued samples in order. Failed requests remain queued for retry.
     flushQueuedReading();
     delay(2);
 }

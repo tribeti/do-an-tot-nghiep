@@ -84,7 +84,7 @@ h3 { margin: 0; font-size: 14px; }
 .metric-pm25 { border-top: 3px solid var(--blue); }
 .metric-pm10 { border-top: 3px solid var(--teal); }
 .metric-co2 { border-top: 3px solid var(--orange); }
-.metric-temp, .metric-humidity, .metric-pressure { border-top: 3px solid #9aabc0; }
+.metric-temp, .metric-humidity { border-top: 3px solid #9aabc0; }
 .threshold-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; }
 .threshold-card { padding: 15px 17px; }
 .threshold-card > div { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
