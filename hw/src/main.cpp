@@ -33,70 +33,95 @@ PMSData pms;
 unsigned long lastPmsUpdate = 0;
 static constexpr unsigned long PMS_STALE_MS = 30000;
 
-// ================== FAN RELAY (GPIO21) ==================
+// ================== FAN + SERVO + BUZZER ==================
 static constexpr uint8_t FAN_RELAY_PIN = 21;
-static constexpr uint8_t FAN_RELAY_ON_LEVEL = HIGH;   // đổi nếu relay active-LOW
-static constexpr uint8_t FAN_RELAY_OFF_LEVEL = LOW;
+static constexpr uint8_t FAN_RELAY_ON_LEVEL = LOW;
+static constexpr uint8_t FAN_RELAY_OFF_LEVEL = HIGH;
 
-// ================== SERVO + BUZZER ==================
-static constexpr uint8_t SERVO_PIN = 22;     // D22
-static constexpr uint8_t BUZZER_PIN = 23;    // D23
+static constexpr uint8_t SERVO_PIN = 22;
+static constexpr uint8_t BUZZER_PIN = 23;
+
 Servo alertServo;
 
 unsigned long lastBeepTime = 0;
 static constexpr unsigned long BEEP_INTERVAL_MS = 400;
 
-// Hysteresis thresholds (PM2.5 ug/m3)
 static constexpr uint16_t PM25_FAN_ON_THRESHOLD = 35;
 static constexpr uint16_t PM25_FAN_OFF_THRESHOLD = 25;
 
 bool fanIsOn = false;
-bool alertActive = false;   // trạng thái cảnh báo (servo + buzzer)
+bool alertActive = false;
 
+// ================== FAN CONTROL ==================
 void setFanState(bool turnOn) {
-  if (fanIsOn == turnOn) return;
-
   fanIsOn = turnOn;
-  digitalWrite(FAN_RELAY_PIN, turnOn ? FAN_RELAY_ON_LEVEL : FAN_RELAY_OFF_LEVEL);
-  Serial.printf("FAN: %s | PM2.5: %u ug/m3\n", turnOn ? "ON" : "OFF", pms.pm2_5);
+
+  digitalWrite(FAN_RELAY_PIN,
+               turnOn ? FAN_RELAY_ON_LEVEL : FAN_RELAY_OFF_LEVEL);
+
+  Serial.printf("FAN: %s | PM2.5: %u ug/m3\n", turnOn ? "ON" : "OFF",
+                pms.pm2_5);
 }
 
+// ================== ALERT CONTROL ==================
 void setAlertState(bool active) {
-  if (alertActive == active) return;
   alertActive = active;
 
   if (active) {
-    // Ô nhiễm → servo quay 90° + buzzer kêu
     alertServo.write(90);
     lastBeepTime = 0;
-    Serial.println("ALERT: Servo + Buzzer ON (ô nhiễm)");
+
+    Serial.println("ALERT: Servo + Buzzer ON");
   } else {
-    // Hết ô nhiễm → servo về 0°
     alertServo.write(0);
     noTone(BUZZER_PIN);
+
     Serial.println("ALERT: Servo + Buzzer OFF");
   }
 }
 
-void updateBuzzer() {
-  if (!alertActive) return;
+// ================== SYNCHRONIZED CONTROL ==================
+void setPollutionState(bool polluted) {
+  setFanState(polluted);
+  setAlertState(polluted);
+}
 
-  unsigned long now = millis();
+// ================== BUZZER ==================
+void updateBuzzer() {
+  if (!alertActive)
+    return;
+
+  const unsigned long now = millis();
+
   if (now - lastBeepTime >= BEEP_INTERVAL_MS) {
     lastBeepTime = now;
-    tone(BUZZER_PIN, 2000, 150);    // kêu 150ms, tần số 2000Hz
+    tone(BUZZER_PIN, 2000, 150);
   }
 }
 
+// ================== AUTOMATIC FAN CONTROL ==================
 void updateFanControl() {
-  if (!pms.valid) return;
+  const bool pmsFresh = pms.valid && (millis() - lastPmsUpdate <= PMS_STALE_MS);
 
+  // Không có dữ liệu PMS7003 mới: tắt toàn bộ
+  if (!pmsFresh) {
+    if (fanIsOn || alertActive) {
+      Serial.println("PMS7003: Data unavailable -> OFF");
+      setPollutionState(false);
+    }
+    return;
+  }
+
+  // PM2.5 >= 35: bật quạt và cảnh báo
   if (!fanIsOn && pms.pm2_5 >= PM25_FAN_ON_THRESHOLD) {
-    setFanState(true);
-    setAlertState(true);          // bật cả servo + buzzer
-  } else if (fanIsOn && pms.pm2_5 <= PM25_FAN_OFF_THRESHOLD) {
-    setFanState(false);
-    setAlertState(false);         // tắt cả servo + buzzer
+    Serial.printf("PM2.5 HIGH: %u -> ON\n", pms.pm2_5);
+    setPollutionState(true);
+  }
+
+  // PM2.5 <= 25: tắt quạt và cảnh báo
+  else if (fanIsOn && pms.pm2_5 <= PM25_FAN_OFF_THRESHOLD) {
+    Serial.printf("PM2.5 NORMAL: %u -> OFF\n", pms.pm2_5);
+    setPollutionState(false);
   }
 }
 
@@ -116,13 +141,17 @@ unsigned long lastSampleTime = 0;
 
 static constexpr size_t QUEUE_CAPACITY = 30;
 static constexpr size_t JSON_BUFFER_SIZE = 384;
+
 char readingQueue[QUEUE_CAPACITY][JSON_BUFFER_SIZE];
+
 size_t queueHead = 0;
 size_t queueTail = 0;
 size_t queueCount = 0;
+
 unsigned long lastPostAttempt = 0;
 unsigned long nextPostDelayMs = 500;
 unsigned long lastWiFiReconnectAttempt = 0;
+
 static constexpr unsigned long WIFI_RECONNECT_INTERVAL_MS = 5000;
 static constexpr unsigned long POST_RETRY_DELAY_MS = 2000;
 
@@ -135,7 +164,8 @@ void readPMS7003() {
     const uint8_t value = static_cast<uint8_t>(PMSSerial.read());
 
     if (index == 0) {
-      if (value != 0x42) continue;
+      if (value != 0x42)
+        continue;
       buffer[index++] = value;
       continue;
     }
@@ -143,9 +173,11 @@ void readPMS7003() {
     if (index == 1) {
       if (value != 0x4D) {
         index = (value == 0x42) ? 1 : 0;
-        if (index == 1) buffer[0] = value;
+        if (index == 1)
+          buffer[0] = value;
         continue;
       }
+
       buffer[index++] = value;
       continue;
     }
@@ -156,20 +188,26 @@ void readPMS7003() {
       index = 0;
 
       uint16_t sum = 0;
-      for (int i = 0; i < 30; ++i) sum += buffer[i];
+
+      for (int i = 0; i < 30; ++i) {
+        sum += buffer[i];
+      }
 
       const uint16_t receivedChecksum =
           (static_cast<uint16_t>(buffer[30]) << 8) | buffer[31];
 
-      if (sum != receivedChecksum) continue;
+      if (sum != receivedChecksum)
+        continue;
 
       pms.pm1_0 = (static_cast<uint16_t>(buffer[10]) << 8) | buffer[11];
       pms.pm2_5 = (static_cast<uint16_t>(buffer[12]) << 8) | buffer[13];
-      pms.pm10  = (static_cast<uint16_t>(buffer[14]) << 8) | buffer[15];
+      pms.pm10 = (static_cast<uint16_t>(buffer[14]) << 8) | buffer[15];
+
       pms.valid = true;
       lastPmsUpdate = millis();
 
-      updateFanControl();   // điều khiển quạt + servo + buzzer ngay
+      updateFanControl();
+
       return;
     }
   }
@@ -177,14 +215,19 @@ void readPMS7003() {
 
 // ================== MH-Z19B READER ==================
 int readMHZ19B() {
-  while (MHZSerial.available() > 0) MHZSerial.read();
+  while (MHZSerial.available() > 0) {
+    MHZSerial.read();
+  }
 
-  const uint8_t command[9] = {0xFF, 0x01, 0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x79};
+  const uint8_t command[9] = {0xFF, 0x01, 0x86, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x79};
+
   MHZSerial.write(command, sizeof(command));
   MHZSerial.flush();
 
   uint8_t response[9] = {};
   size_t received = 0;
+
   const unsigned long startedAt = millis();
 
   while (received < sizeof(response) && millis() - startedAt < 300) {
@@ -193,13 +236,18 @@ int readMHZ19B() {
     }
   }
 
-  if (received != sizeof(response) || response[0] != 0xFF || response[1] != 0x86) {
+  if (received != sizeof(response) || response[0] != 0xFF ||
+      response[1] != 0x86) {
     mhzOK = false;
     return -1;
   }
 
   uint8_t checksum = 0;
-  for (int i = 1; i <= 7; ++i) checksum += response[i];
+
+  for (int i = 1; i <= 7; ++i) {
+    checksum += response[i];
+  }
+
   checksum = static_cast<uint8_t>(0xFF - checksum + 1);
 
   if (checksum != response[8]) {
@@ -208,6 +256,7 @@ int readMHZ19B() {
   }
 
   const int ppm = (static_cast<int>(response[2]) << 8) | response[3];
+
   if (ppm <= 0) {
     mhzOK = false;
     return -1;
@@ -220,36 +269,47 @@ int readMHZ19B() {
 // ================== TIME ==================
 String getUtcTimestamp() {
   const time_t now = time(nullptr);
-  if (now < 1700000000) return "";
+
+  if (now < 1700000000)
+    return "";
 
   struct tm utcTime;
   gmtime_r(&now, &utcTime);
 
   char datePart[24];
+
   strftime(datePart, sizeof(datePart), "%Y-%m-%dT%H:%M:%S", &utcTime);
 
   timeval tv;
   gettimeofday(&tv, nullptr);
 
   char result[32];
+
   snprintf(result, sizeof(result), "%s.%03ldZ", datePart, tv.tv_usec / 1000);
+
   return String(result);
 }
 
 void configureNtp() {
-  if (ntpConfigured) return;
+  if (ntpConfigured)
+    return;
+
   configTime(0, 0, "pool.ntp.org", "time.google.com");
   ntpConfigured = true;
 }
 
 void startNtpTime() {
   configureNtp();
+
   Serial.print("NTP: synchronizing");
+
   const unsigned long startedAt = millis();
+
   while (time(nullptr) < 1700000000 && millis() - startedAt < 10000) {
     Serial.print('.');
     delay(250);
   }
+
   Serial.println(time(nullptr) >= 1700000000 ? " OK" : " unavailable");
 }
 
@@ -259,7 +319,9 @@ void connectWiFi() {
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   Serial.print("Wi-Fi: connecting");
+
   const unsigned long startedAt = millis();
+
   while (WiFi.status() != WL_CONNECTED && millis() - startedAt < 15000) {
     Serial.print('.');
     delay(300);
@@ -267,8 +329,10 @@ void connectWiFi() {
 
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println(" connected");
+
     Serial.print("ESP32 IP: ");
     Serial.println(WiFi.localIP());
+
     startNtpTime();
   } else {
     Serial.println(" connection failed; will retry");
@@ -282,11 +346,14 @@ bool ensureWiFi() {
   }
 
   const unsigned long now = millis();
+
   if (now - lastWiFiReconnectAttempt >= WIFI_RECONNECT_INTERVAL_MS) {
     Serial.println("Wi-Fi disconnected; attempting reconnect...");
+
     WiFi.reconnect();
     lastWiFiReconnectAttempt = now;
   }
+
   return false;
 }
 
@@ -294,10 +361,13 @@ bool ensureWiFi() {
 enum class PostResult { Success, Retry, Rejected };
 
 PostResult postReading(const char *payload) {
-  if (!ensureWiFi()) return PostResult::Retry;
+  if (!ensureWiFi()) {
+    return PostResult::Retry;
+  }
 
   WiFiClient client;
   HTTPClient http;
+
   http.setConnectTimeout(3000);
   http.setTimeout(3000);
 
@@ -307,29 +377,36 @@ PostResult postReading(const char *payload) {
   }
 
   http.addHeader("Content-Type", "application/json");
+
   const int statusCode = http.POST(String(payload));
 
   PostResult result = PostResult::Retry;
+
   if (statusCode >= 200 && statusCode < 300) {
     Serial.printf("HTTP POST: %d\n", statusCode);
     result = PostResult::Success;
   } else if (statusCode >= 400 && statusCode < 500) {
     Serial.printf("HTTP POST rejected: %d\n", statusCode);
     Serial.println(http.getString());
+
     result = PostResult::Rejected;
   } else if (statusCode > 0) {
     Serial.printf("HTTP server error: %d\n", statusCode);
     Serial.println(http.getString());
   } else {
-    Serial.printf("HTTP POST failed: %s\n", http.errorToString(statusCode).c_str());
+    Serial.printf("HTTP POST failed: %s\n",
+                  http.errorToString(statusCode).c_str());
   }
 
   http.end();
+
   return result;
 }
 
+// ================== JSON QUEUE ==================
 void enqueueReading(const char *payload) {
   const size_t length = strlen(payload);
+
   if (length == 0 || length >= JSON_BUFFER_SIZE) {
     Serial.println("Queue: JSON payload is empty or too large");
     return;
@@ -338,37 +415,54 @@ void enqueueReading(const char *payload) {
   if (queueCount == QUEUE_CAPACITY) {
     queueHead = (queueHead + 1) % QUEUE_CAPACITY;
     --queueCount;
+
     Serial.println("Queue full: oldest sample discarded");
   }
 
   memcpy(readingQueue[queueTail], payload, length + 1);
+
   queueTail = (queueTail + 1) % QUEUE_CAPACITY;
   ++queueCount;
-  Serial.printf("Queue: %u sample(s) waiting\n", static_cast<unsigned>(queueCount));
+
+  Serial.printf("Queue: %u sample(s) waiting\n",
+                static_cast<unsigned>(queueCount));
 }
 
 void flushQueuedReading() {
-  if (queueCount == 0) return;
+  if (queueCount == 0)
+    return;
 
   const unsigned long now = millis();
-  if (now - lastPostAttempt < nextPostDelayMs) return;
 
-  if (!ensureWiFi()) return;
+  if (now - lastPostAttempt < nextPostDelayMs)
+    return;
+
+  if (!ensureWiFi())
+    return;
 
   lastPostAttempt = now;
+
   const PostResult result = postReading(readingQueue[queueHead]);
+
   if (result == PostResult::Success) {
     queueHead = (queueHead + 1) % QUEUE_CAPACITY;
     --queueCount;
+
     nextPostDelayMs = 500;
-    Serial.printf("Backend: sample accepted; %u remaining\n", static_cast<unsigned>(queueCount));
+
+    Serial.printf("Backend: sample accepted; %u remaining\n",
+                  static_cast<unsigned>(queueCount));
   } else if (result == PostResult::Rejected) {
     queueHead = (queueHead + 1) % QUEUE_CAPACITY;
     --queueCount;
+
     nextPostDelayMs = 500;
-    Serial.printf("Backend: rejected sample discarded; %u remaining\n", static_cast<unsigned>(queueCount));
+
+    Serial.printf("Backend: rejected sample discarded; %u remaining\n",
+                  static_cast<unsigned>(queueCount));
   } else {
     nextPostDelayMs = POST_RETRY_DELAY_MS;
+
     Serial.println("Backend: send failed; sample kept for retry");
   }
 }
@@ -383,6 +477,7 @@ void collectAndSendReading() {
                         humidity >= 0.0F && humidity <= 100.0F;
 
   int co2 = -1;
+
   if (millis() - bootTime >= MHZ_WARMUP_MS) {
     co2 = readMHZ19B();
   } else {
@@ -393,7 +488,9 @@ void collectAndSendReading() {
   const bool pmsFresh = pms.valid && (millis() - lastPmsUpdate <= PMS_STALE_MS);
 
   StaticJsonDocument<384> document;
+
   const String timestamp = getUtcTimestamp();
+
   if (timestamp.length() > 0) {
     document["measured_at"] = timestamp;
   }
@@ -408,8 +505,11 @@ void collectAndSendReading() {
     document["pm10"] = nullptr;
   }
 
-  if (co2 > 0 && mhzOK) document["co2"] = co2;
-  else document["co2"] = nullptr;
+  if (co2 > 0 && mhzOK) {
+    document["co2"] = co2;
+  } else {
+    document["co2"] = nullptr;
+  }
 
   if (dhtFresh) {
     document["temperature"] = temperature;
@@ -420,13 +520,17 @@ void collectAndSendReading() {
   }
 
   const bool hasSensorData = pmsFresh || (co2 > 0 && mhzOK) || dhtFresh;
+
   if (!hasSensorData) {
     Serial.println("JSON: no valid sensor measurements; sample not queued");
   }
 
   char payload[JSON_BUFFER_SIZE];
+
   if (hasSensorData) {
-    const size_t payloadLength = serializeJson(document, payload, sizeof(payload));
+    const size_t payloadLength =
+        serializeJson(document, payload, sizeof(payload));
+
     if (payloadLength == 0 || payloadLength >= sizeof(payload)) {
       Serial.println("JSON: serialization failed");
       return;
@@ -434,25 +538,38 @@ void collectAndSendReading() {
   }
 
   Serial.println("\n========== SENSOR READING ==========");
+
   if (pmsFresh) {
-    Serial.printf("PMS7003 | PM1.0: %u, PM2.5: %u, PM10: %u ug/m3\n", pms.pm1_0, pms.pm2_5, pms.pm10);
+    Serial.printf("PMS7003 | PM1.0: %u, PM2.5: %u, PM10: %u ug/m3\n", pms.pm1_0,
+                  pms.pm2_5, pms.pm10);
   } else {
     Serial.println("PMS7003 | No recent valid frame");
   }
 
-  if (co2 > 0 && mhzOK) Serial.printf("MH-Z19B | CO2: %d ppm\n", co2);
-  else Serial.println("MH-Z19B | Unavailable / warming up");
+  if (co2 > 0 && mhzOK) {
+    Serial.printf("MH-Z19B | CO2: %d ppm\n", co2);
+  } else {
+    Serial.println("MH-Z19B | Unavailable / warming up");
+  }
 
-  if (dhtFresh)
-    Serial.printf("DHT22   | Temperature: %.2f C, Humidity: %.2f %%\n", temperature, humidity);
-  else
+  if (dhtFresh) {
+    Serial.printf("DHT22   | Temperature: %.2f C, Humidity: %.2f %%\n",
+                  temperature, humidity);
+  } else {
     Serial.println("DHT22   | No valid measurement");
+  }
+
+  Serial.printf("FAN     | %s\n", fanIsOn ? "ON" : "OFF");
+
+  Serial.printf("ALERT   | %s\n", alertActive ? "ON" : "OFF");
 
   if (hasSensorData) {
     Serial.print("JSON: ");
     Serial.println(payload);
+
     enqueueReading(payload);
   }
+
   Serial.println("====================================\n");
 }
 
@@ -460,48 +577,59 @@ void collectAndSendReading() {
 void setup() {
   Serial.begin(115200);
   delay(1000);
+
   bootTime = millis();
 
   Serial.println();
   Serial.println("===== ESP32 Air Quality Monitor =====");
   Serial.println("Sampling interval: 10 seconds");
 
-  // Fan relay
-  digitalWrite(FAN_RELAY_PIN, FAN_RELAY_OFF_LEVEL);
+  // FAN RELAY
   pinMode(FAN_RELAY_PIN, OUTPUT);
+  digitalWrite(FAN_RELAY_PIN, FAN_RELAY_OFF_LEVEL);
+
+  fanIsOn = false;
+
   Serial.println("Fan relay: GPIO21 (OFF)");
 
-  // Buzzer
+  // BUZZER
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
 
-  // Servo
+  // SERVO
   alertServo.attach(SERVO_PIN);
-  alertServo.write(0);          // về vị trí 0 lúc khởi động
+  alertServo.write(0);
+
   delay(300);
 
-  // ===== TEST LÚC SETUP =====
+  // TEST SERVO
   Serial.println("TEST: Servo quay 90 do...");
   alertServo.write(90);
   delay(800);
 
-  Serial.println("TEST: Buzzer kêu...");
+  // TEST BUZZER
+  Serial.println("TEST: Buzzer keu...");
+
   for (int i = 0; i < 3; i++) {
     tone(BUZZER_PIN, 2000, 150);
     delay(250);
   }
+
   noTone(BUZZER_PIN);
 
-  alertServo.write(0);          // về lại 0 sau test
+  alertServo.write(0);
   delay(300);
+
   Serial.println("TEST xong. Bat dau chay binh thuong.\n");
 
-  // Sensors
+  // SENSORS
   dht.begin();
+
   Serial.printf("DHT22  : GPIO%u\n", static_cast<unsigned>(DHT_DATA_PIN));
 
   PMSSerial.begin(9600, SERIAL_8N1, PMS_RX, PMS_TX);
   MHZSerial.begin(9600, SERIAL_8N1, MHZ_RX, MHZ_TX);
+
   Serial.println("PMS7003: RX=16, TX=17");
   Serial.println("MH-Z19B: RX=18, TX=19");
   Serial.println("Servo  : GPIO22");
@@ -510,21 +638,31 @@ void setup() {
   connectWiFi();
 
   lastSampleTime = millis();
+
   Serial.println("=====================================");
 }
 
 // ================== LOOP ==================
 void loop() {
+  // Đọc PMS7003
   readPMS7003();
 
+  // Kiểm tra trạng thái quạt và cảnh báo
+  updateFanControl();
+
+  // Điều khiển buzzer
   updateBuzzer();
 
   const unsigned long now = millis();
+
+  // Thu thập dữ liệu mỗi 10 giây
   if (now - lastSampleTime >= SAMPLE_INTERVAL_MS) {
     lastSampleTime = now;
     collectAndSendReading();
   }
 
+  // Gửi dữ liệu đang chờ
   flushQueuedReading();
+
   delay(2);
 }
