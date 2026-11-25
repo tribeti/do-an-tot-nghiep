@@ -32,12 +32,11 @@ static constexpr unsigned long SAMPLE_INTERVAL_MS = 10000;  // chu kỳ thu th�
 static constexpr unsigned long PMS_STALE_MS = 30000;        // PMS cũ hơn 30 s -> coi như mất dữ liệu
 static constexpr unsigned long CO2_STALE_MS = 30000;        // CO2 cũ hơn 30 s -> coi như mất dữ liệu
 static constexpr unsigned long MHZ_WARMUP_MS = 180000;      // MH-Z19B cần ~3 phút làm nóng
-static constexpr unsigned long BEEP_INTERVAL_MS = 400;      // chu kỳ bíp còi khi cảnh báo
+static constexpr unsigned long BEEP_INTERVAL_MS = 3000;      // chu kỳ bíp còi khi cảnh báo
 static constexpr unsigned long WIFI_RECONNECT_INTERVAL_MS = 5000;
 static constexpr unsigned long POST_RETRY_DELAY_MS = 2000;  // chờ trước khi gửi lại mẫu thất bại
 
-// Ngưỡng cảnh báo: vượt ngưỡng ở BẤT KỲ chỉ số nào -> bật quạt + còi + servo.
-// PM2.5 >= 25: bật; < 25: tắt.
+// Ngưỡng cảnh báo: vượt ngưỡng ở BẤT KỲ chỉ số nào -> bật quạt + còi + servo. PM2.5 >= 25: bật; < 25: tắt.
 static constexpr uint16_t PM25_FAN_ON_THRESHOLD = 25;   // ug/m3
 static constexpr uint16_t PM10_THRESHOLD = 100;         // ug/m3
 static constexpr uint16_t CO2_THRESHOLD = 1000;         // ppm
