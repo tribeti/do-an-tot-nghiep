@@ -161,7 +161,7 @@ POST thành công trả HTTP `201`. Sau đó gọi lại `/api/readings/latest` 
 
 ## Trung bình và cảnh báo
 
-Backend tính trung bình trượt cho PM2.5, PM10 và CO2 trong hai cửa sổ 8 giờ và 24 giờ. Chỉ cửa sổ có dữ liệu bao phủ đủ khoảng thời gian mới được so sánh với ngưỡng. Cảnh báo được tạo hoặc cập nhật khi trung bình vượt ngưỡng; khi trung bình không còn vượt ngưỡng, cảnh báo chuyển sang trạng thái `resolved`.
+Cảnh báo là tức thời: mẫu đo mới nhất vượt ngưỡng là tạo/cập nhật cảnh báo trong bảng `alerts` ngay; khi mẫu mới nhất trở lại dưới ngưỡng, cảnh báo chuyển sang trạng thái `resolved`. Dashboard vẫn hiển thị trung bình trượt 8 giờ và 24 giờ để tham khảo, nhưng trung bình không còn là điều kiện kích hoạt cảnh báo.
 
 | Thông số | Ngưỡng cảnh báo |
 |---|---:|

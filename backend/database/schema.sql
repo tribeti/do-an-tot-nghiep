@@ -21,7 +21,9 @@ CREATE INDEX IF NOT EXISTS idx_sensor_readings_measured_at
 CREATE TABLE IF NOT EXISTS alerts (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     parameter VARCHAR(20) NOT NULL CHECK (parameter IN ('pm2_5', 'pm10', 'co2')),
-    window_hours SMALLINT NOT NULL CHECK (window_hours IN (8, 24)),
+    -- window_hours = 0: instant alert from the newest sample;
+    -- 8 and 24: legacy average-window alerts kept for old rows.
+    window_hours SMALLINT NOT NULL CHECK (window_hours IN (0, 8, 24)),
     average_value DOUBLE PRECISION NOT NULL,
     threshold_value DOUBLE PRECISION NOT NULL,
     window_start TIMESTAMPTZ NOT NULL,
@@ -32,7 +34,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     resolved_at TIMESTAMPTZ
 );
 
--- Prevent multiple simultaneously-active alerts for the same parameter and averaging window.
+-- Prevent multiple simultaneously-active alerts for the same parameter and window.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_alerts_active_parameter_window
     ON alerts (parameter, window_hours)
     WHERE status = 'active';

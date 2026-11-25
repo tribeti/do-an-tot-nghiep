@@ -11,17 +11,47 @@
 #include <DHT.h>
 #include <ESP32Servo.h>
 
-#include "secrets.h"
+#include "secrets.h"  // WIFI_SSID, WIFI_PASSWORD, SERVER_URL
 
-// ================== SENSOR OBJECTS ==================
+// ================== SƠ ĐỒ CHÂN ==================
 static constexpr uint8_t DHT_DATA_PIN = 4;
-DHT dht(DHT_DATA_PIN, DHT22);
-
-// ================== PMS7003 (UART2) ==================
-HardwareSerial PMSSerial(2);
 static constexpr int PMS_RX = 16;
 static constexpr int PMS_TX = 17;
+static constexpr int MHZ_RX = 18;
+static constexpr int MHZ_TX = 19;
+static constexpr uint8_t FAN_RELAY_PIN = 21;
+static constexpr uint8_t SERVO_PIN = 22;
+static constexpr uint8_t BUZZER_PIN = 23;
 
+// Relay quạt kích mức LOW: ghi LOW = bật quạt, ghi HIGH = tắt quạt.
+static constexpr uint8_t FAN_RELAY_ON_LEVEL = LOW;
+static constexpr uint8_t FAN_RELAY_OFF_LEVEL = HIGH;
+
+// ================== CẤU HÌNH ==================
+static constexpr unsigned long SAMPLE_INTERVAL_MS = 10000;  // chu kỳ thu thập + gửi mẫu
+static constexpr unsigned long PMS_STALE_MS = 30000;        // PMS cũ hơn 30 s -> coi như mất dữ liệu
+static constexpr unsigned long CO2_STALE_MS = 30000;        // CO2 cũ hơn 30 s -> coi như mất dữ liệu
+static constexpr unsigned long MHZ_WARMUP_MS = 180000;      // MH-Z19B cần ~3 phút làm nóng
+static constexpr unsigned long BEEP_INTERVAL_MS = 400;      // chu kỳ bíp còi khi cảnh báo
+static constexpr unsigned long WIFI_RECONNECT_INTERVAL_MS = 5000;
+static constexpr unsigned long POST_RETRY_DELAY_MS = 2000;  // chờ trước khi gửi lại mẫu thất bại
+
+// Ngưỡng cảnh báo: vượt ngưỡng ở BẤT KỲ chỉ số nào -> bật quạt + còi + servo.
+// PM2.5 >= 25: bật; < 25: tắt.
+static constexpr uint16_t PM25_FAN_ON_THRESHOLD = 25;   // ug/m3
+static constexpr uint16_t PM10_THRESHOLD = 100;         // ug/m3
+static constexpr uint16_t CO2_THRESHOLD = 1000;         // ppm
+
+static constexpr size_t QUEUE_CAPACITY = 30;     // số mẫu giữ tối đa trong RAM khi mất mạng
+static constexpr size_t JSON_BUFFER_SIZE = 384;  // kích thước bộ đệm 1 mẫu JSON
+
+// ================== ĐỐI TƯỢNG PHẦN CỨNG ==================
+DHT dht(DHT_DATA_PIN, DHT22);
+HardwareSerial PMSSerial(2);
+HardwareSerial MHZSerial(1);
+Servo alertServo;
+
+// ================== TRẠNG THÁI ==================
 struct PMSData {
   uint16_t pm1_0 = 0;
   uint16_t pm2_5 = 0;
@@ -31,39 +61,39 @@ struct PMSData {
 
 PMSData pms;
 unsigned long lastPmsUpdate = 0;
-static constexpr unsigned long PMS_STALE_MS = 30000;
 
-// ================== FAN + SERVO + BUZZER ==================
-static constexpr uint8_t FAN_RELAY_PIN = 21;
-static constexpr uint8_t FAN_RELAY_ON_LEVEL = LOW;
-static constexpr uint8_t FAN_RELAY_OFF_LEVEL = HIGH;
-
-static constexpr uint8_t SERVO_PIN = 22;
-static constexpr uint8_t BUZZER_PIN = 23;
-
-Servo alertServo;
-
-unsigned long lastBeepTime = 0;
-static constexpr unsigned long BEEP_INTERVAL_MS = 400;
-
-static constexpr uint16_t PM25_FAN_ON_THRESHOLD = 25;
-static constexpr uint16_t PM25_FAN_OFF_THRESHOLD = 25;
+unsigned long bootTime = 0;  // để tính MH-Z19B đã làm nóng đủ 3 phút chưa
+bool mhzOK = false;          // lần đọc CO2 gần nhất có hợp lệ không
+int co2Ppm = -1;             // nồng độ CO2 gần nhất; -1 = chưa có / đọc lỗi
+unsigned long lastCo2Update = 0;
+bool ntpConfigured = false;
 
 bool fanIsOn = false;
 bool alertActive = false;
 
-// ================== FAN CONTROL ==================
+unsigned long lastBeepTime = 0;
+
+// Hàng đợi mẫu đo (vòng tròn): head = mẫu cũ nhất cần gửi, tail = chỗ trống.
+char readingQueue[QUEUE_CAPACITY][JSON_BUFFER_SIZE];
+size_t queueHead = 0;
+size_t queueTail = 0;
+size_t queueCount = 0;
+
+unsigned long lastSampleTime = 0;
+unsigned long lastPostAttempt = 0;
+unsigned long nextPostDelayMs = 500;
+unsigned long lastWiFiReconnectAttempt = 0;
+
+// ================== ĐIỀU KHIỂN QUẠT ==================
 void setFanState(bool turnOn) {
   fanIsOn = turnOn;
 
-  digitalWrite(FAN_RELAY_PIN,
-               turnOn ? FAN_RELAY_ON_LEVEL : FAN_RELAY_OFF_LEVEL);
+  digitalWrite(FAN_RELAY_PIN, turnOn ? FAN_RELAY_ON_LEVEL : FAN_RELAY_OFF_LEVEL);
 
-  Serial.printf("FAN: %s | PM2.5: %u ug/m3\n", turnOn ? "ON" : "OFF",
-                pms.pm2_5);
+  Serial.printf("FAN: %s | PM2.5: %u ug/m3\n", turnOn ? "ON" : "OFF", pms.pm2_5);
 }
 
-// ================== ALERT CONTROL ==================
+// ================== ĐIỀU KHIỂN CẢNH BÁO ==================
 void setAlertState(bool active) {
   alertActive = active;
 
@@ -80,13 +110,14 @@ void setAlertState(bool active) {
   }
 }
 
-// ================== SYNCHRONIZED CONTROL ==================
+// Quạt và cảnh báo luôn cùng trạng thái: ô nhiễm -> bật cả hai.
 void setPollutionState(bool polluted) {
   setFanState(polluted);
   setAlertState(polluted);
 }
 
 // ================== BUZZER ==================
+// Gõ còi định kỳ mà không chặn loop (dùng millis, không dùng delay).
 void updateBuzzer() {
   if (!alertActive)
     return;
@@ -99,63 +130,34 @@ void updateBuzzer() {
   }
 }
 
-// ================== AUTOMATIC FAN CONTROL ==================
-void updateFanControl() {
+// ================== TỰ ĐỘNG CẢNH BÁO ==================
+// Ô nhiễm nếu BẤT KỲ chỉ số nào vượt ngưỡng: PM2.5 >= 25,
+// PM10 >= 100 (ug/m3) hoặc CO2 >= 1000 ppm -> bật quạt + còi + servo.
+// Cảm biến nào không có dữ liệu mới thì không xét chỉ số đó;
+// không còn chỉ số nào vượt ngưỡng -> tắt toàn bộ.
+void updatePollutionControl() {
   const bool pmsFresh = pms.valid && (millis() - lastPmsUpdate <= PMS_STALE_MS);
+  const bool co2Fresh = co2Ppm > 0 && (millis() - lastCo2Update <= CO2_STALE_MS);
 
-  // Không có dữ liệu PMS7003 mới: tắt toàn bộ
-  if (!pmsFresh) {
-    if (fanIsOn || alertActive) {
-      Serial.println("PMS7003: Data unavailable -> OFF");
-      setPollutionState(false);
+  const bool pmExceeded = pmsFresh &&
+      (pms.pm2_5 >= PM25_FAN_ON_THRESHOLD || pms.pm10 >= PM10_THRESHOLD);
+  const bool co2Exceeded = co2Fresh && co2Ppm >= CO2_THRESHOLD;
+
+  const bool polluted = pmExceeded || co2Exceeded;
+
+  if (polluted && !fanIsOn) {
+    if (co2Exceeded && !pmExceeded) {
+      Serial.printf("CO2 HIGH: %d ppm -> ON\n", co2Ppm);
     }
-    return;
-  }
-
-  // PM2.5 >= 25: bật quạt và cảnh báo
-  if (!fanIsOn && pms.pm2_5 >= PM25_FAN_ON_THRESHOLD) {
-    Serial.printf("PM2.5 HIGH: %u -> ON\n", pms.pm2_5);
     setPollutionState(true);
-  }
-
-  // PM2.5 <= 25: tắt quạt và cảnh báo
-  else if (fanIsOn && pms.pm2_5 <= PM25_FAN_OFF_THRESHOLD) {
-    Serial.printf("PM2.5 NORMAL: %u -> OFF\n", pms.pm2_5);
+  } else if (!polluted && fanIsOn) {
     setPollutionState(false);
   }
 }
 
-// ================== MH-Z19B (UART1) ==================
-HardwareSerial MHZSerial(1);
-static constexpr int MHZ_RX = 18;
-static constexpr int MHZ_TX = 19;
-
-static constexpr unsigned long MHZ_WARMUP_MS = 180000;
-unsigned long bootTime = 0;
-bool mhzOK = false;
-bool ntpConfigured = false;
-
-// ================== SAMPLE / NETWORK ==================
-static constexpr unsigned long SAMPLE_INTERVAL_MS = 10000;
-unsigned long lastSampleTime = 0;
-
-static constexpr size_t QUEUE_CAPACITY = 30;
-static constexpr size_t JSON_BUFFER_SIZE = 384;
-
-char readingQueue[QUEUE_CAPACITY][JSON_BUFFER_SIZE];
-
-size_t queueHead = 0;
-size_t queueTail = 0;
-size_t queueCount = 0;
-
-unsigned long lastPostAttempt = 0;
-unsigned long nextPostDelayMs = 500;
-unsigned long lastWiFiReconnectAttempt = 0;
-
-static constexpr unsigned long WIFI_RECONNECT_INTERVAL_MS = 5000;
-static constexpr unsigned long POST_RETRY_DELAY_MS = 2000;
-
-// ================== PMS7003 FRAME READER ==================
+// ================== ĐỌC PMS7003 ==================
+// Khung PMS7003: 32 byte, bắt đầu 0x42 0x4D. PM2.5 ở byte 12-13...
+// Checksum = tổng 30 byte đầu, so với 2 byte cuối (big-endian).
 void readPMS7003() {
   static uint8_t buffer[32];
   static uint8_t index = 0;
@@ -163,6 +165,7 @@ void readPMS7003() {
   while (PMSSerial.available() > 0) {
     const uint8_t value = static_cast<uint8_t>(PMSSerial.read());
 
+    // Đồng bộ đầu khung: tìm cặp 0x42 0x4D
     if (index == 0) {
       if (value != 0x42)
         continue;
@@ -184,6 +187,7 @@ void readPMS7003() {
 
     buffer[index++] = value;
 
+    // Đủ 32 byte -> kiểm tra checksum rồi lấy PM1.0 / PM2.5 / PM10
     if (index == sizeof(buffer)) {
       index = 0;
 
@@ -206,21 +210,22 @@ void readPMS7003() {
       pms.valid = true;
       lastPmsUpdate = millis();
 
-      updateFanControl();
+      updatePollutionControl();
 
       return;
     }
   }
 }
 
-// ================== MH-Z19B READER ==================
+// ================== ĐỌC MH-Z19B ==================
+// Gửi lệnh đọc CO2 (0x86) rồi chờ 9 byte phản hồi trong 300 ms.
+// Checksum = (0xFF - tổng byte 1..7) + 1.
 int readMHZ19B() {
   while (MHZSerial.available() > 0) {
     MHZSerial.read();
   }
 
-  const uint8_t command[9] = {0xFF, 0x01, 0x86, 0x00, 0x00,
-                              0x00, 0x00, 0x00, 0x79};
+  const uint8_t command[9] = {0xFF, 0x01, 0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x79};
 
   MHZSerial.write(command, sizeof(command));
   MHZSerial.flush();
@@ -266,7 +271,8 @@ int readMHZ19B() {
   return ppm;
 }
 
-// ================== TIME ==================
+// ================== THỜI GIAN / NTP ==================
+// Trả về "2026-11-25T12:34:56.789Z". Chuỗi rỗng = chưa có giờ NTP.
 String getUtcTimestamp() {
   const time_t now = time(nullptr);
 
@@ -298,6 +304,7 @@ void configureNtp() {
   ntpConfigured = true;
 }
 
+// Chờ NTP đồng bộ tối đa 10 giây khi mới khởi động.
 void startNtpTime() {
   configureNtp();
 
@@ -339,6 +346,7 @@ void connectWiFi() {
   }
 }
 
+// Gọi thường xuyên trong loop: đã nối thì return true, mất thì thử kết nối lại mỗi 5 giây và return false.
 bool ensureWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     configureNtp();
@@ -357,7 +365,7 @@ bool ensureWiFi() {
   return false;
 }
 
-// ================== HTTP POST ==================
+// ================== GỬI LÊN BACKEND (HTTP POST) ==================
 enum class PostResult { Success, Retry, Rejected };
 
 PostResult postReading(const char *payload) {
@@ -386,6 +394,7 @@ PostResult postReading(const char *payload) {
     Serial.printf("HTTP POST: %d\n", statusCode);
     result = PostResult::Success;
   } else if (statusCode >= 400 && statusCode < 500) {
+    // Backend từ chối (dữ liệu sai): gửi lại cũng vô ích -> bỏ mẫu
     Serial.printf("HTTP POST rejected: %d\n", statusCode);
     Serial.println(http.getString());
 
@@ -394,8 +403,7 @@ PostResult postReading(const char *payload) {
     Serial.printf("HTTP server error: %d\n", statusCode);
     Serial.println(http.getString());
   } else {
-    Serial.printf("HTTP POST failed: %s\n",
-                  http.errorToString(statusCode).c_str());
+    Serial.printf("HTTP POST failed: %s\n", http.errorToString(statusCode).c_str());
   }
 
   http.end();
@@ -403,7 +411,7 @@ PostResult postReading(const char *payload) {
   return result;
 }
 
-// ================== JSON QUEUE ==================
+// ================== HÀNG ĐỢI MẪU ĐO ==================
 void enqueueReading(const char *payload) {
   const size_t length = strlen(payload);
 
@@ -412,6 +420,7 @@ void enqueueReading(const char *payload) {
     return;
   }
 
+  // Hàng đợi đầy: bỏ mẫu cũ nhất để nhường mẫu mới
   if (queueCount == QUEUE_CAPACITY) {
     queueHead = (queueHead + 1) % QUEUE_CAPACITY;
     --queueCount;
@@ -424,10 +433,11 @@ void enqueueReading(const char *payload) {
   queueTail = (queueTail + 1) % QUEUE_CAPACITY;
   ++queueCount;
 
-  Serial.printf("Queue: %u sample(s) waiting\n",
-                static_cast<unsigned>(queueCount));
+  Serial.printf("Queue: %u sample(s) waiting\n", static_cast<unsigned>(queueCount));
 }
 
+// Gửi thử mẫu đầu hàng đợi (gọi liên tục trong loop, tự bỏ qua nếu
+// chưa đủ thời gian chờ hoặc chưa có Wi-Fi).
 void flushQueuedReading() {
   if (queueCount == 0)
     return;
@@ -444,30 +454,31 @@ void flushQueuedReading() {
 
   const PostResult result = postReading(readingQueue[queueHead]);
 
-  if (result == PostResult::Success) {
-    queueHead = (queueHead + 1) % QUEUE_CAPACITY;
-    --queueCount;
-
-    nextPostDelayMs = 500;
-
-    Serial.printf("Backend: sample accepted; %u remaining\n",
-                  static_cast<unsigned>(queueCount));
-  } else if (result == PostResult::Rejected) {
-    queueHead = (queueHead + 1) % QUEUE_CAPACITY;
-    --queueCount;
-
-    nextPostDelayMs = 500;
-
-    Serial.printf("Backend: rejected sample discarded; %u remaining\n",
-                  static_cast<unsigned>(queueCount));
-  } else {
+  if (result == PostResult::Retry) {
+    // Mất mạng / lỗi server: giữ mẫu, chờ lâu hơn rồi thử lại
     nextPostDelayMs = POST_RETRY_DELAY_MS;
 
     Serial.println("Backend: send failed; sample kept for retry");
+  } else {
+    // Thành công hoặc bị từ chối: đều bỏ mẫu khỏi hàng đợi
+    queueHead = (queueHead + 1) % QUEUE_CAPACITY;
+    --queueCount;
+
+    nextPostDelayMs = 500;
+
+    if (result == PostResult::Success) {
+      Serial.printf("Backend: sample accepted; %u remaining\n",
+                    static_cast<unsigned>(queueCount));
+    } else {
+      Serial.printf("Backend: rejected sample discarded; %u remaining\n",
+                    static_cast<unsigned>(queueCount));
+    }
   }
 }
 
-// ================== COLLECT + SEND ONE SAMPLE ==================
+// ================== THU THẬP 1 MẪU ĐO ==================
+// Đọc DHT22 + MH-Z19B, gộp với dữ liệu PMS7003 gần nhất thành JSON
+// rồi xếp vào hàng đợi. Giá trị cảm biến lỗi -> ghi null vào JSON.
 void collectAndSendReading() {
   const float temperature = dht.readTemperature();
   const float humidity = dht.readHumidity();
@@ -476,18 +487,21 @@ void collectAndSendReading() {
                         temperature <= 80.0F && isfinite(humidity) &&
                         humidity >= 0.0F && humidity <= 100.0F;
 
-  int co2 = -1;
-
   if (millis() - bootTime >= MHZ_WARMUP_MS) {
-    co2 = readMHZ19B();
+    co2Ppm = readMHZ19B();
   } else {
+    co2Ppm = -1;
     mhzOK = false;
     Serial.println("MH-Z19B: warming up (about 3 minutes)");
   }
 
+  if (co2Ppm > 0) {
+    lastCo2Update = millis();
+  }
+
   const bool pmsFresh = pms.valid && (millis() - lastPmsUpdate <= PMS_STALE_MS);
 
-  StaticJsonDocument<384> document;
+  StaticJsonDocument<JSON_BUFFER_SIZE> document;
 
   const String timestamp = getUtcTimestamp();
 
@@ -505,8 +519,8 @@ void collectAndSendReading() {
     document["pm10"] = nullptr;
   }
 
-  if (co2 > 0 && mhzOK) {
-    document["co2"] = co2;
+  if (co2Ppm > 0 && mhzOK) {
+    document["co2"] = co2Ppm;
   } else {
     document["co2"] = nullptr;
   }
@@ -519,7 +533,8 @@ void collectAndSendReading() {
     document["humidity"] = nullptr;
   }
 
-  const bool hasSensorData = pmsFresh || (co2 > 0 && mhzOK) || dhtFresh;
+  // Backend yêu cầu đủ cả 6 giá trị cảm biến
+  const bool hasSensorData = pmsFresh || (co2Ppm > 0 && mhzOK) || dhtFresh;
 
   if (!hasSensorData) {
     Serial.println("JSON: no valid sensor measurements; sample not queued");
@@ -537,6 +552,7 @@ void collectAndSendReading() {
     }
   }
 
+  // In toàn bộ số đo ra Serial để theo dõi
   Serial.println("\n========== SENSOR READING ==========");
 
   if (pmsFresh) {
@@ -546,8 +562,8 @@ void collectAndSendReading() {
     Serial.println("PMS7003 | No recent valid frame");
   }
 
-  if (co2 > 0 && mhzOK) {
-    Serial.printf("MH-Z19B | CO2: %d ppm\n", co2);
+  if (co2Ppm > 0 && mhzOK) {
+    Serial.printf("MH-Z19B | CO2: %d ppm\n", co2Ppm);
   } else {
     Serial.println("MH-Z19B | Unavailable / warming up");
   }
@@ -592,6 +608,13 @@ void setup() {
 
   Serial.println("Fan relay: GPIO21 (OFF)");
 
+  // ---- TEST QUẠT: bật 2 giây rồi tắt, kiểm tra relay + đấu nối ----
+  Serial.println("TEST: Fan ON 2s...");
+  setFanState(true);
+  delay(2000);
+  setFanState(false);
+  Serial.println("TEST: Fan OFF.\n");
+
   // BUZZER
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
@@ -601,26 +624,6 @@ void setup() {
   alertServo.write(0);
 
   delay(300);
-
-  // TEST SERVO
-  Serial.println("TEST: Servo quay 90 do...");
-  alertServo.write(90);
-  delay(800);
-
-  // TEST BUZZER
-  Serial.println("TEST: Buzzer keu...");
-
-  for (int i = 0; i < 3; i++) {
-    tone(BUZZER_PIN, 2000, 150);
-    delay(250);
-  }
-
-  noTone(BUZZER_PIN);
-
-  alertServo.write(0);
-  delay(300);
-
-  Serial.println("TEST xong. Bat dau chay binh thuong.\n");
 
   // SENSORS
   dht.begin();
@@ -647,8 +650,8 @@ void loop() {
   // Đọc PMS7003
   readPMS7003();
 
-  // Kiểm tra trạng thái quạt và cảnh báo
-  updateFanControl();
+  // Cập nhật quạt + cảnh báo theo PM2.5 / PM10 / CO2
+  updatePollutionControl();
 
   // Điều khiển buzzer
   updateBuzzer();

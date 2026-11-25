@@ -26,28 +26,34 @@ app.use(cors({ origin: process.env.CORS_ORIGIN ?? "*" }));
 app.use(express.json({ limit: "64kb" }));
 
 app.get("/health", async (_req, res) => {
-    try {
-        await pool.query("SELECT 1");
-        res.json({ success: true, status: "ok", database: "connected" });
-    } catch (error) {
-        console.error("Health check failed:", error);
-        res.status(503).json({ success: false, status: "unavailable", database: "disconnected" });
-    }
+  try {
+    await pool.query("SELECT 1");
+    res.json({ success: true, status: "ok", database: "connected" });
+  } catch (error) {
+    console.error("Health check failed:", error);
+    res
+      .status(503)
+      .json({
+        success: false,
+        status: "unavailable",
+        database: "disconnected",
+      });
+  }
 });
 
 app.get("/api", (_req, res) => {
-    res.json({
-        name: "Indoor Air Quality API",
-        status: "running",
-        endpoints: [
-            "GET /health",
-            "POST /api/readings",
-            "GET /api/readings/latest",
-            "GET /api/readings/history",
-            "GET /api/readings/averages",
-            "GET /api/alerts"
-        ]
-    });
+  res.json({
+    name: "Indoor Air Quality API",
+    status: "running",
+    endpoints: [
+      "GET /health",
+      "POST /api/readings",
+      "GET /api/readings/latest",
+      "GET /api/readings/history",
+      "GET /api/readings/averages",
+      "GET /api/alerts",
+    ],
+  });
 });
 
 app.use("/api/readings", readingsRoutes);
@@ -58,22 +64,24 @@ app.use("/api/alerts", alertsRoutes);
 app.use(express.static(publicDirectory, { etag: true, maxAge: 0 }));
 
 app.use((_req, res) => {
-    res.status(404).json({ success: false, message: "Route not found." });
+  res.status(404).json({ success: false, message: "Route not found." });
 });
 
 const jsonErrorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
-    if (error instanceof SyntaxError && "body" in error) {
-        res.status(400).json({ success: false, message: "Invalid JSON body." });
-        return;
-    }
+  if (error instanceof SyntaxError && "body" in error) {
+    res.status(400).json({ success: false, message: "Invalid JSON body." });
+    return;
+  }
 
-    if (error?.type === "entity.too.large") {
-        res.status(413).json({ success: false, message: "Request body is too large." });
-        return;
-    }
+  if (error?.type === "entity.too.large") {
+    res
+      .status(413)
+      .json({ success: false, message: "Request body is too large." });
+    return;
+  }
 
-    console.error("Unhandled request error:", error);
-    res.status(500).json({ success: false, message: "Internal server error." });
+  console.error("Unhandled request error:", error);
+  res.status(500).json({ success: false, message: "Internal server error." });
 };
 
 app.use(jsonErrorHandler);

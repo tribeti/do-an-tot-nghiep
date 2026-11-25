@@ -145,10 +145,10 @@
       const unit = item.parameter === "co2" ? "ppm" : "µg/m³";
       return `<article class="alert-item">
         <div class="alert-item-top">
-          <span class="alert-title">${escapeHtml(label[item.parameter] || item.parameter)} · cửa sổ ${escapeHtml(item.window_hours)} giờ</span>
+          <span class="alert-title">${escapeHtml(label[item.parameter] || item.parameter)} · ${Number(item.window_hours) === 0 ? "tức thời" : `cửa sổ ${escapeHtml(item.window_hours)} giờ`}</span>
           <span class="alert-state ${active ? "active" : "resolved"}">${active ? "Đang hoạt động" : "Đã kết thúc"}</span>
         </div>
-        <div class="alert-detail">Trung bình ${numberFormat(item.average_value, 1)} ${unit} / ngưỡng ${numberFormat(item.threshold_value, 0)} ${unit}</div>
+        <div class="alert-detail">Giá trị ${numberFormat(item.average_value, 1)} ${unit} / ngưỡng ${numberFormat(item.threshold_value, 0)} ${unit}</div>
         <div class="alert-time">${dateFormat(item.created_at)}</div>
       </article>`;
     }).join("");
