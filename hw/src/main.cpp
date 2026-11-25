@@ -46,7 +46,7 @@ Servo alertServo;
 unsigned long lastBeepTime = 0;
 static constexpr unsigned long BEEP_INTERVAL_MS = 400;
 
-xstatic constexpr uint16_t PM25_FAN_ON_THRESHOLD = 25;
+static constexpr uint16_t PM25_FAN_ON_THRESHOLD = 25;
 static constexpr uint16_t PM25_FAN_OFF_THRESHOLD = 25;
 
 bool fanIsOn = false;
