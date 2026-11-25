@@ -136,7 +136,7 @@ Ví dụ payload gửi đến `POST /api/readings`:
 }
 ```
 
-`measured_at` là thời điểm đo theo ISO 8601 có múi giờ; nếu không có, backend dùng thời điểm nhận dữ liệu. Giá trị cảm biến có thể là `null` nếu cảm biến chưa sẵn sàng hoặc không có dữ liệu. Mỗi request cần có ít nhất một giá trị cảm biến khác `null`.
+`measured_at` là thời điểm đo theo ISO 8601 có múi giờ; nếu không có, backend dùng thời điểm nhận dữ liệu. Cả sáu trường cảm biến `pm1_0`, `pm2_5`, `pm10`, `co2`, `temperature`, `humidity` đều bắt buộc; mẫu đo thiếu bất kỳ trường nào (gửi `null` hoặc bỏ trống) bị coi là dữ liệu rác và bị từ chối với HTTP `400`.
 
 Kiểm tra nhanh khi backend đang chạy:
 
@@ -157,7 +157,7 @@ curl -X POST http://localhost:3001/api/readings \
   -d '{"measured_at":"2026-11-03T10:00:00Z","pm1_0":10,"pm2_5":18,"pm10":25,"co2":650,"temperature":28.5,"humidity":65}'
 ```
 
-POST thành công trả HTTP `201`. Sau đó gọi lại `/api/readings/latest` để xác nhận dữ liệu đã được lưu. Có thể bỏ `measured_at`; khi đó backend dùng thời điểm nhận mẫu. Mỗi request cần có ít nhất một giá trị cảm biến khác `null`.
+POST thành công trả HTTP `201`. Sau đó gọi lại `/api/readings/latest` để xác nhận dữ liệu đã được lưu. Có thể bỏ `measured_at`; khi đó backend dùng thời điểm nhận mẫu. Mẫu đo thiếu bất kỳ trường cảm biến nào bị từ chối với HTTP `400`.
 
 ## Trung bình và cảnh báo
 

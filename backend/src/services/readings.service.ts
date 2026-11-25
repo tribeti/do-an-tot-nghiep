@@ -33,12 +33,12 @@ export async function insertReading(reading: ReadingInput) {
         RETURNING id, measured_at, received_at, pm1_0, pm2_5, pm10, co2, temperature, humidity`,
         [
             reading.measured_at ?? null,
-            reading.pm1_0 ?? null,
-            reading.pm2_5 ?? null,
-            reading.pm10 ?? null,
-            reading.co2 ?? null,
-            reading.temperature ?? null,
-            reading.humidity ?? null
+            reading.pm1_0,
+            reading.pm2_5,
+            reading.pm10,
+            reading.co2,
+            reading.temperature,
+            reading.humidity
         ]
     );
 

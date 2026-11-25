@@ -2,6 +2,23 @@
 
 Backend dùng Express và PostgreSQL để nhận mẫu đo từ ESP32, lưu lịch sử, tính trung bình 8/24 giờ và quản lý cảnh báo. Hướng dẫn phần cứng và chạy toàn hệ thống nằm trong [README.md](../README.md).
 
+## Cấu trúc code
+
+Một request đi qua đúng 4 lớp, mỗi thư mục một nhiệm vụ:
+
+```
+server.ts            đọc .env, kiểm tra PostgreSQL, mở port, tắt server gọn
+app.ts               ghép middleware, mount routes, phục vụ dashboard, bắt lỗi
+  routes/            khai báo URL -> controller (1 dòng mỗi endpoint)
+  controllers/       kiểm tra query/body, gọi service, trả JSON + mã lỗi
+  validators/        schema zod chặn mẫu đo thiếu/null trước khi chạm SQL
+  services/          toàn bộ SQL: đọc/ghi PostgreSQL, trung bình 8/24 giờ, cảnh báo
+config/database.ts   kết nối pool PostgreSQL dùng chung cho cả dự án
+database/schema.sql  cấu trúc bảng và chỉ mục
+```
+
+Muốn thêm một endpoint: khai báo URL trong `routes/`, viết handler trong `controllers/`, đặt SQL trong `services/`.
+
 ## Yêu cầu
 
 - Node.js và npm.

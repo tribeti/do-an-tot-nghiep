@@ -46,7 +46,7 @@ Servo alertServo;
 unsigned long lastBeepTime = 0;
 static constexpr unsigned long BEEP_INTERVAL_MS = 400;
 
-static constexpr uint16_t PM25_FAN_ON_THRESHOLD = 35;
+xstatic constexpr uint16_t PM25_FAN_ON_THRESHOLD = 25;
 static constexpr uint16_t PM25_FAN_OFF_THRESHOLD = 25;
 
 bool fanIsOn = false;
@@ -112,7 +112,7 @@ void updateFanControl() {
     return;
   }
 
-  // PM2.5 >= 35: bật quạt và cảnh báo
+  // PM2.5 >= 25: bật quạt và cảnh báo
   if (!fanIsOn && pms.pm2_5 >= PM25_FAN_ON_THRESHOLD) {
     Serial.printf("PM2.5 HIGH: %u -> ON\n", pms.pm2_5);
     setPollutionState(true);

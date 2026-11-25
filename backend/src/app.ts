@@ -1,3 +1,17 @@
+// ============================================================
+//  Backend giám sát chất lượng không khí
+//  ------------------------------------------------------------
+//  Một request đi qua đúng 4 lớp (mỗi thư mục một lớp):
+//    server.ts      : đọc .env, kiểm tra PostgreSQL, mở port, tắt gọn
+//    app.ts (file này): ghép middleware, mount routes, phục vụ dashboard
+//    routes/        : khai báo URL -> controller (1 dòng mỗi endpoint)
+//    controllers/   : kiểm tra query/body, gọi service, trả JSON + mã lỗi
+//    validators/    : schema zod chặn mẫu đo thiếu/null trước khi chạm SQL
+//    services/      : toàn bộ SQL (đọc/ghi PostgreSQL, trung bình, cảnh báo)
+//  Thêm endpoint mới: khai báo ở routes/, viết handler ở controllers/,
+//  đặt SQL ở services/. Không viết SQL trong controller.
+// ============================================================
+
 import cors from "cors";
 import express, { type ErrorRequestHandler } from "express";
 import path from "node:path";

@@ -7,8 +7,6 @@ const ALERT_RULES = [
     { parameter: "co2", threshold: 1000 }
 ] as const;
 
-type AlertParameter = typeof ALERT_RULES[number]["parameter"];
-
 export async function evaluateAlerts(): Promise<void> {
     // 8-hour window: public buildings; 24-hour window: residential rooms.
     for (const windowHours of [8, 24] as const) {
@@ -16,8 +14,7 @@ export async function evaluateAlerts(): Promise<void> {
         if (!summary.complete) continue;
 
         for (const rule of ALERT_RULES) {
-            const parameter: AlertParameter = rule.parameter;
-            const averageValue = summary.averages[parameter];
+            const averageValue = summary.averages[rule.parameter];
             if (averageValue === null) continue;
 
             if (averageValue > rule.threshold) {
@@ -35,7 +32,7 @@ export async function evaluateAlerts(): Promise<void> {
                         window_start = EXCLUDED.window_start,
                         window_end = EXCLUDED.window_end,
                         updated_at = NOW()`,
-                    [parameter, windowHours, averageValue, rule.threshold, summary.window_start, summary.window_end]
+                    [rule.parameter, windowHours, averageValue, rule.threshold, summary.window_start, summary.window_end]
                 );
             } else {
                 await pool.query(
@@ -50,7 +47,7 @@ export async function evaluateAlerts(): Promise<void> {
                      WHERE parameter = $5
                        AND window_hours = $6
                        AND status = 'active'`,
-                    [averageValue, rule.threshold, summary.window_start, summary.window_end, parameter, windowHours]
+                    [averageValue, rule.threshold, summary.window_start, summary.window_end, rule.parameter, windowHours]
                 );
             }
         }
