@@ -23,7 +23,7 @@ static constexpr uint8_t FAN_RELAY_PIN = 21;
 static constexpr uint8_t SERVO_PIN = 22;
 static constexpr uint8_t BUZZER_PIN = 23;
 
-// Relay quạt kích mức LOW: ghi LOW = bật quạt, ghi HIGH = tắt quạt.
+// cau hinh relay dieu khien quat
 static constexpr uint8_t FAN_RELAY_ON_LEVEL = HIGH;
 static constexpr uint8_t FAN_RELAY_OFF_LEVEL = LOW;
 
